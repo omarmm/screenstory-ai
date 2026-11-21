@@ -712,7 +712,7 @@ fn delete_recording(recording_id: String, state: State<'_, AppState>) -> Result<
     timeline::ensure_timeline_table(&project_dir)?;
     render::ensure_render_table(&project_dir)?;
 
-    let (file_name, recording_path) = analysis::resolve_recording(&project_dir, &recording_id)?;
+    let (_, recording_path) = analysis::resolve_recording(&project_dir, &recording_id)?;
     let connection = db_connection(&project_dir)?;
     let active_analyses: i64 = connection.query_row(
         "SELECT COUNT(*) FROM analysis_runs
