@@ -7,7 +7,6 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::State;
@@ -556,6 +555,7 @@ pub fn save_timeline(
         .ok_or_else(|| AppError::new("NO_ACTIVE_PROJECT", "Open a project before saving a timeline."))?;
     ensure_timeline_table(&project_dir)?;
     let connection = db_connection(&project_dir)?;
+    connection.execute_batch("BEGIN IMMEDIATE").map_err(|_| AppError::new("TIMELINE_DATABASE_ERROR", "The timeline could not acquire the project write lock."))?;
     let (recording_id, run_id, current_revision, snapshot): (String, String, i64, String) =
         connection.query_row(
             "SELECT recording_id, source_analysis_run_id, current_revision, current_snapshot FROM timelines WHERE timeline_id=?1",
@@ -613,9 +613,14 @@ pub fn save_timeline(
         params![timeline.revision as i64, next_relative, timeline.updated_at_ms as i64, timeline.timeline_id, expected_revision as i64],
     ).map_err(|_| AppError::new("TIMELINE_DATABASE_ERROR", "The new timeline revision was written, but the project index could not be updated."))?;
     if updated != 1 {
+        let _ = connection.execute_batch("ROLLBACK");
         let _ = fs::remove_file(&next_path);
         return Err(AppError::new("TIMELINE_REVISION_CONFLICT", "A newer timeline revision already exists. Reload before saving."));
     }
+    connection.execute_batch("COMMIT").map_err(|_| {
+        let _ = fs::remove_file(&next_path);
+        AppError::new("TIMELINE_DATABASE_ERROR", "The timeline index could not commit the new revision.")
+    })?;
     Ok(timeline)
 }
 
