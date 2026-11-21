@@ -149,7 +149,7 @@ fn install_ffmpeg() -> InstallResult {
                 message
             },
             report,
-        };
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
