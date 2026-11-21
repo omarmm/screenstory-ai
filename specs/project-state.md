@@ -3,100 +3,88 @@
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
 **Current milestone:** M3 — post-recording AI analysis  
-**Status:** M2 implementation passed CI; target-device capture verification pending. M3 specification approved; implementation not yet started.
+**Status:** M2 CI/package succeeded; target-device test pending. M3 backend and UI implementation are committed; latest CI rerun is testing Rust and packaging. M4 design is approved; implementation not started.
 
 ## Product scope
 
-- Linux-first desktop application.
-- Full desktop and specific-window recording; specific-window backend remains unresolved.
-- Optional workflow description.
-- Post-recording AI analysis using Gemini initially.
-- Provider-independent AI contracts.
-- Hybrid zoom, editable timeline, Arabic/English annotations, and MP4 export.
-- Local-first projects; original recording remains immutable.
+Linux-first desktop application that turns local screen recordings into editable AI-assisted tutorials. The original recording remains immutable. The product includes local project management, recording, optional workflow context, post-recording AI analysis, a versioned editable timeline, hybrid zoom, Arabic/English annotations, preview, and MP4 export.
 
-## Approved architecture
+## Architecture
 
-Tauri v2 + React + TypeScript + Rust. FFmpeg handles video capture/processing. SQLite + filesystem store project metadata and large media. Python is not a mandatory desktop runtime.
+Tauri v2 + React + TypeScript + Rust; FFmpeg for recording and video processing; SQLite for project/index metadata; filesystem for large media and versioned JSON. Python is not a mandatory desktop runtime.
 
-## Completed milestones
+## M1 — Desktop foundation
 
-### M1 — desktop foundation
+- Tauri v2 application shell, typed Rust bridge, frontend unit tests and Rust tests.
+- Linux CI and Debian packaging.
+- Relative Vite production asset paths for the Tauri local app URL.
 
-- Tauri v2 application shell and typed Rust bridge.
-- React/TypeScript application, frontend tests, and Rust tests.
-- Linux CI workflow and Debian packaging.
-- Vite production asset paths use relative references for the Tauri local app URL.
-
-### M2 — first usable local recording slice
+## M2 — Local projects and X11 desktop recording
 
 Specification: `specs/recording/SPEC-018-local-project-and-recording.md`.
 
-Implemented on `prototype/tauri-foundation`:
-- Create, list, and open local projects.
-- Per-project SQLite metadata and recording index.
-- Filesystem project workspace beneath the managed Screenstory projects directory.
-- Project folders for recordings, analysis, timeline, assets, and exports.
-- Full-desktop FFmpeg x11grab recording in X11 sessions at 30 FPS.
-- Recording status and elapsed timer.
-- Graceful stop, MP4 finalization, and recording registration in the project library.
-- Project switching is blocked while recording.
-- UI explicitly identifies full-desktop X11 capture and does not claim Wayland or selected-window capture.
-- Application-exit recording cleanup.
+Implemented:
+- Create/list/open local projects, per-project SQLite index, managed local folders.
+- Full-desktop FFmpeg x11grab, X11 only, 30 FPS; Start/Stop, elapsed state, MP4 finalization and recording library.
+- Project switching blocked during recording; exit cleanup.
+- The UI clearly states unsupported Wayland and selected-window capture.
 
-**Build evidence (2026-11-21):**
-- App version: 0.2.1
-- Commit: `153bbd4de27e7ee24955ab2d03d25a1f626cf54a`
-- GitHub Actions run: `44939256173`
-- Frontend typecheck, tests, and production build: passed.
-- Rust format, tests, and Clippy: passed.
-- Debian package build and package metadata verification: passed.
-- Artifact: `screenstory-linux-deb`.
+Verification:
+- Version 0.2.1, commit `153bbd4de27e7ee24955ab2d03d25a1f626cf54a`.
+- GitHub Actions run `44939256173`: frontend typecheck/tests/build, Rust fmt/test/Clippy and Debian packaging succeeded.
+- Artifact `screenstory-linux-deb`.
+- Target-device test remains pending: install, capture a real MP4, verify playback, dimensions/frame rate, graceful stop and persistence.
+- CI success is not evidence of a real capture on the target machine.
 
-## Verification still required for M2
-
-- Install and run 0.2.1 on the target Linux Mint machine.
-- Capture a real short MP4 and verify playback, dimensions, frame rate, and graceful stop.
-- Verify relaunch persistence and project recording-library refresh on the target machine.
-- Complete SPEC-017 consent-based FFmpeg installation with visible progress before release.
-- Validate generated Debian dependencies against the supported Linux Mint baselines.
-
-CI success does not prove capture quality on the target device. Do not claim device validation until a real MP4 is captured and played there.
-
-## M3 — post-recording AI analysis
+## M3 — Post-recording AI analysis
 
 Approved specification: `specs/analysis/SPEC-019-post-recording-ai-analysis.md`.
 
-Implementation scope:
-- User-initiated, persisted, cancellable analysis runs with visible progress.
-- Local ffprobe metadata inspection and bounded, timestamped periodic frame extraction.
-- Versioned frame manifest; original MP4 stays untouched and is never uploaded.
-- Gemini Interactions API adapter using structured output and a provider-independent contract.
-- Linux Secret Service/keyring storage for the user-provided API key; no plaintext fallback.
-- Per-run cloud-transfer consent with disclosure of frames/text sent.
-- Stateless Gemini request (`store=false`), bounded retries, normalized errors.
-- Domain validation of timestamps, frame evidence, confidence, and normalized zoom geometry.
-- Save AI output as an unapproved draft; re-analysis cannot overwrite earlier drafts or manual edits.
+Implemented on the current prototype branch:
+- Per-project analysis-run persistence and cancellable run state.
+- Managed recording resolution and local ffprobe inspection.
+- Deterministic periodic frame extraction (up to 60 images), scaling, timestamped manifest and local retention.
+- Gemini Interactions API request adapter, structured output schema, bounded retries and stateless `store=false`.
+- Gemini API key save/read/delete through Linux Secret Service keyring; no plain-text fallback.
+- Explicit cloud-transfer confirmation after local extraction; request contains sampled images and optional description, never the source MP4.
+- Domain validation of step timestamps, evidence frame references, confidence and zoom geometry.
+- Separate, immutable `needs_review` draft; re-analysis does not update a timeline.
+- UI for key setup, recording analysis, extraction progress, cloud consent, provider state and review of generated steps.
 
-M3 intentionally does not include the timeline editor or MP4 tutorial renderer.
+**Verification status (latest run `44941901960`):**
+- Frontend typecheck, unit tests, production build and Tauri asset check passed.
+- Rust tests passed in the previous run `44941655377`.
+- The only issue in that run was Clippy's `too_many_arguments` on two internal helpers; scoped, documented allowances were added in commit `2c6dc186ae54c47a933ca837f46548ccd077020f`.
+- Latest CI is re-running native tests/lint and Debian packaging; do not call M3 released until the full run passes.
+- A real Gemini request using a user-owned API key and a real recorded clip is not yet verified on the target device.
+- In-flight provider cancellation is bounded by request timeout, not immediate.
+- Model ID is currently a Rust default constant; per-user model configuration is not yet exposed.
 
-## Not implemented yet
+## M4 — Versioned timeline and step editing
 
-- Selected-window recording and Wayland portal/PipeWire capture.
-- M3 analysis implementation and Gemini integration.
-- Persisted editable timeline editor, manual step editing, zoom editing, and Arabic/English annotations.
-- Preview and final MP4 tutorial rendering/export.
-- Audio capture, pause/resume, webcam capture, and background recording.
-- Complete assisted FFmpeg installation with visible progress.
+Approved specification: `specs/timeline/SPEC-020-versioned-timeline-and-step-editing.md`.
 
-## Future milestones
+Decisions:
+- User explicitly converts a completed AI draft into a separate editable timeline.
+- Versioned JSON snapshots are stored under the project's managed timeline directory; SQLite tracks current revision.
+- Each save uses an expected revision (optimistic concurrency) and writes a new atomic snapshot; prior revisions remain recoverable.
+- User can add/edit/delete/reorder steps, subject to time/order/evidence validation.
+- AI draft and original recording are immutable; re-analysis never overwrites timeline edits.
+- M4 supports step editing; zoom acceptance/editing and annotations remain later milestones.
 
-1. M4 — versioned timeline persistence and step editing.
-2. M5 — hybrid zoom editing and Arabic/English annotations.
-3. M6 — video preview and deterministic MP4 tutorial export.
-4. M7 — selected-window and Wayland capture adapters, after separate capability proofs.
-5. M8 — release hardening, assisted runtime dependency installation, compatibility validation, and licensing/package review.
+## Remaining milestones
 
-## Verification policy
+1. Finish M3 CI and verify real analysis on target Linux Mint with a user-owned Gemini API key.
+2. M4 — versioned timeline persistence and step editor.
+3. M5 — accept/reject and edit zoom suggestions; manual zoom creation; bilingual RTL/LTR annotations and font/shaping verification.
+4. M6 — source preview, composited timeline preview, deterministic MP4 rendering/export including audio preservation and output verification.
+5. M7 — selected-window capture, followed by Wayland portal/PipeWire adapter.
+6. M8 — dependency consent/progress installer, Linux Mint compatibility matrix, packaging/security/licensing/release hardening.
 
-Each milestone requires specification approval, implementation, automated tests, CI packaging, and explicit verification evidence. CI evidence is not a substitute for target-device behavior tests.
+## Deferred
+
+Windows/macOS, live AI, audio transcription, voice-over, cloud project storage, video upload to providers, webcam capture and PDF export.
+
+## Release verification policy
+
+Each milestone requires an approved specification, implementation, automated tests, CI packaging, and explicit verification evidence. A CI-built package does not prove target-device functionality. Never label the whole MVP complete until all required release acceptance criteria pass.
