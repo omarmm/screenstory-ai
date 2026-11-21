@@ -8,6 +8,17 @@ type DependencyReport = { dependencies: Dependency[] };
 type Project = { id: string; name: string; createdAt: string; updatedAt: string; recordingsCount: number };
 type Recording = { id: string; fileName: string; createdAt: string; durationSeconds: number };
 type CaptureStatus = { isRecording: boolean; fileName: string | null; startedAtMs: number | null };
+type AnalysisStatus = {
+  runId: string; recordingId: string; sourceFileName: string; status: string;
+  completedFrames: number; totalFrames: number; totalBytes: number;
+  durationSeconds: number | null; provider: string; model: string;
+  errorCode: string | null; workflowDescription: string; language: string;
+};
+type AnalysisDraft = {
+  schemaVersion: number; summary: string; status: string; language: string;
+  steps: { id: string; title: string; description: string; startMs: number; endMs: number; confidence: number; evidenceKind: string; evidenceFrameIds: string[] }[];
+  zoomSuggestions: { id: string; startMs: number; endMs: number; x: number; y: number; width: number; height: number; targetScale: number; rationale: string; evidenceFrameIds: string[] }[];
+};
 
 function formatDuration(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
@@ -41,6 +52,14 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [geminiKeyConfigured, setGeminiKeyConfigured] = useState(false);
+  const [geminiKeyInput, setGeminiKeyInput] = useState("");
+  const [workflowDescription, setWorkflowDescription] = useState("");
+  const [analysisLanguage, setAnalysisLanguage] = useState<"auto" | "en" | "ar">("auto");
+  const [activeAnalysis, setActiveAnalysis] = useState<AnalysisStatus | null>(null);
+  const [analysisDraft, setAnalysisDraft] = useState<AnalysisDraft | null>(null);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [credentialStoreAvailable, setCredentialStoreAvailable] = useState(true);
 
   const ffmpeg = dependencies?.dependencies.find((item) => item.id === "ffmpeg");
   const elapsedSeconds = useMemo(() => capture.startedAtMs === null ? 0 : Math.floor((clock - capture.startedAtMs) / 1000), [capture.startedAtMs, clock]);
@@ -66,6 +85,11 @@ export default function App() {
       setAppInfo(info);
       setDependencies(report);
       setCapture(currentCapture);
+      const keyStatus = await invoke<{ configured: boolean }>("get_gemini_key_status").catch(() => {
+        setCredentialStoreAvailable(false);
+        return { configured: false };
+      });
+      setGeminiKeyConfigured(keyStatus.configured);
       await refreshProjects();
     } catch (reason) {
       setError(friendlyError(reason));
@@ -74,6 +98,24 @@ export default function App() {
     }
   }
   useEffect(() => { void bootstrap(); }, []);
+  useEffect(() => {
+    if (!activeAnalysis?.runId || ["awaiting_cloud_consent", "completed", "failed", "cancelled"].includes(activeAnalysis.status)) return;
+    const runId = activeAnalysis.runId;
+    const timer = window.setInterval(() => {
+      void invoke<AnalysisStatus>("get_analysis_status", { runId })
+        .then((next) => setActiveAnalysis(next))
+        .catch((reason) => setError(friendlyError(reason)));
+    }, 900);
+    return () => window.clearInterval(timer);
+  }, [activeAnalysis?.runId, activeAnalysis?.status]);
+
+  useEffect(() => {
+    if (!activeAnalysis || activeAnalysis.status !== "completed" || analysisDraft) return;
+    void invoke<AnalysisDraft>("get_analysis_draft", { runId: activeAnalysis.runId })
+      .then(setAnalysisDraft)
+      .catch((reason) => setError(friendlyError(reason)));
+  }, [activeAnalysis?.runId, activeAnalysis?.status, analysisDraft]);
+
   useEffect(() => {
     if (!capture.isRecording) return;
     const timer = window.setInterval(() => setClock(Date.now()), 500);
@@ -95,11 +137,73 @@ export default function App() {
     setBusy(true); setError(null);
     try {
       const opened = await invoke<Project>("open_project", { projectId: project.id });
-      setActiveProject(opened); setNotice("Opened “" + opened.name + "”.");
+      setActiveProject(opened); setActiveAnalysis(null); setAnalysisDraft(null); setNotice("Opened “" + opened.name + "”.");
       await refreshProjects();
     } catch (reason) { setError(friendlyError(reason)); }
     finally { setBusy(false); }
   }
+  async function saveGeminiKey() {
+    setAnalysisBusy(true); setError(null);
+    try {
+      const status = await invoke<{ configured: boolean }>("save_gemini_api_key", { apiKey: geminiKeyInput });
+      setGeminiKeyConfigured(status.configured);
+      setGeminiKeyInput("");
+      setCredentialStoreAvailable(true);
+      setNotice("Gemini API key saved in your desktop credential store.");
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setAnalysisBusy(false); }
+  }
+  async function deleteGeminiKey() {
+    setAnalysisBusy(true); setError(null);
+    try {
+      await invoke("delete_gemini_api_key");
+      setGeminiKeyConfigured(false);
+      setNotice("Gemini API key removed from your desktop credential store.");
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setAnalysisBusy(false); }
+  }
+  async function startAnalysis(recording: Recording) {
+    setAnalysisBusy(true); setError(null); setNotice(null); setAnalysisDraft(null);
+    try {
+      const started = await invoke<{ runId: string; recordingId: string; fileName: string }>("start_analysis", {
+        recordingId: recording.id,
+        workflowDescription,
+        language: analysisLanguage,
+      });
+      setActiveAnalysis({
+        runId: started.runId, recordingId: started.recordingId, sourceFileName: started.fileName,
+        status: "extracting_frames", completedFrames: 0, totalFrames: 0, totalBytes: 0,
+        durationSeconds: null, provider: "gemini", model: "gemini-4-hydrogen",
+        errorCode: null, workflowDescription, language: analysisLanguage,
+      });
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setAnalysisBusy(false); }
+  }
+  async function sendAnalysisToGemini() {
+    if (!activeAnalysis || activeAnalysis.status !== "awaiting_cloud_consent") return;
+    const megabytes = (activeAnalysis.totalBytes / (1024 * 1024)).toFixed(2);
+    const approved = window.confirm(
+      "Send " + activeAnalysis.completedFrames + " sampled JPEG frames (" + megabytes + " MiB) and the optional workflow description to Google Gemini (" + activeAnalysis.model + ")?\n\nThe original MP4 will NOT be uploaded. The sampled frames may still contain private information; automatic redaction is not guaranteed. Only continue if you approve this transfer."
+    );
+    if (!approved) return;
+    setAnalysisBusy(true); setError(null);
+    try {
+      await invoke("send_analysis_to_gemini", { runId: activeAnalysis.runId });
+      setActiveAnalysis({ ...activeAnalysis, status: "sending_to_provider" });
+      setNotice("Sampled frames sent to Gemini. Preparing your tutorial draft…");
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setAnalysisBusy(false); }
+  }
+  async function cancelAnalysis() {
+    if (!activeAnalysis) return;
+    try {
+      await invoke("cancel_analysis", { runId: activeAnalysis.runId });
+      const next = await invoke<AnalysisStatus>("get_analysis_status", { runId: activeAnalysis.runId });
+      setActiveAnalysis(next);
+      setNotice("Analysis cancelled. The original recording was not changed.");
+    } catch (reason) { setError(friendlyError(reason)); }
+  }
+
   async function startRecording() {
     setBusy(true); setError(null); setNotice(null);
     try {
@@ -186,6 +290,63 @@ export default function App() {
             </div>
           ) : (
             <div className="project-view">
+              <section className="analysis-settings">
+                <div className="section-heading"><div><span className="eyebrow">AI PROVIDER</span><h2>Gemini analysis</h2></div>
+                  <span className={geminiKeyConfigured ? "credential-pill ready" : "credential-pill"}>{geminiKeyConfigured ? "API KEY SAVED" : "SETUP REQUIRED"}</span></div>
+                {!geminiKeyConfigured ? (
+                  <div className="credential-form">
+                    <p>Your key is stored in the Linux desktop credential store, not in the project or a plain-text file.</p>
+                    {!credentialStoreAvailable && <p className="inline-warning">The desktop credential store could not be reached. Unlock your keyring and restart Screenstory.</p>}
+                    <div className="credential-input-row">
+                      <input type="password" autoComplete="off" value={geminiKeyInput} onChange={(event) => setGeminiKeyInput(event.target.value)} placeholder="Paste your Gemini API key" aria-label="Gemini API key" />
+                      <button className="secondary-button" onClick={() => void saveGeminiKey()} disabled={analysisBusy || geminiKeyInput.trim().length < 20}>Save key</button>
+                    </div>
+                    <small>Create a key in Google AI Studio. Screenstory does not send anything until you approve the analysis request.</small>
+                  </div>
+                ) : (
+                  <div className="credential-form saved-credential">
+                    <p>Your Gemini key is stored securely in the desktop credential store.</p>
+                    <button className="text-button" onClick={() => void deleteGeminiKey()} disabled={analysisBusy}>Remove API key</button>
+                  </div>
+                )}
+                <label className="field-label" htmlFor="workflow-description">Optional workflow context</label>
+                <textarea id="workflow-description" value={workflowDescription} maxLength={2000} onChange={(event) => setWorkflowDescription(event.target.value)} placeholder="Describe what this workflow is meant to accomplish. This is context for Gemini, not proof of what happened." />
+                <div className="language-row"><label className="field-label" htmlFor="analysis-language">Tutorial language</label>
+                  <select id="analysis-language" value={analysisLanguage} onChange={(event) => setAnalysisLanguage(event.target.value as "auto" | "en" | "ar")}>
+                    <option value="auto">Automatic</option><option value="en">English</option><option value="ar">العربية</option>
+                  </select>
+                </div>
+              </section>
+
+              {activeAnalysis && (
+                <section className="analysis-progress-card">
+                  <div className="section-heading"><div><span className="eyebrow">ANALYSIS RUN</span><h2>{activeAnalysis.sourceFileName}</h2></div><span className={"analysis-status-pill " + activeAnalysis.status}>{activeAnalysis.status.replaceAll("_", " ")}</span></div>
+                  {activeAnalysis.status === "extracting_frames" && <>
+                    <p>Preparing representative frames locally. The original MP4 stays on this device.</p>
+                    <div className="progress-track"><span style={{ width: activeAnalysis.totalFrames ? (activeAnalysis.completedFrames / activeAnalysis.totalFrames * 100) + "%" : "4%" }} /></div>
+                    <small>{activeAnalysis.completedFrames} / {activeAnalysis.totalFrames || "…"} frames extracted</small>
+                  </>}
+                  {activeAnalysis.status === "awaiting_cloud_consent" && <>
+                    <p>Local frame preparation is complete. No data has been sent yet.</p>
+                    <div className="consent-details"><strong>Transfer review</strong><span>Provider: Google Gemini · {activeAnalysis.model}</span><span>Recording: {activeAnalysis.sourceFileName} · {formatDuration(activeAnalysis.durationSeconds ?? 0)}</span><span>Sampled frames: {activeAnalysis.completedFrames} · {(activeAnalysis.totalBytes / (1024 * 1024)).toFixed(2)} MiB</span><span>Workflow text: {activeAnalysis.workflowDescription.trim() ? "Included" : "None"}</span><b>Only sampled frames and the optional text are sent. The original MP4 is not uploaded.</b><small>Frames can still contain private information. Automatic redaction is not guaranteed.</small></div>
+                    <div className="analysis-actions"><button className="primary-button" onClick={() => void sendAnalysisToGemini()} disabled={!geminiKeyConfigured || analysisBusy}>Approve & send frames to Gemini</button><button className="secondary-button" onClick={() => void cancelAnalysis()}>Cancel run</button></div>
+                    {!geminiKeyConfigured && <small>Save a Gemini API key above before approving the transfer.</small>}
+                  </>}
+                  {activeAnalysis.status === "sending_to_provider" && <>
+                    <p>Gemini is reviewing the approved sample frames and preparing evidence-linked tutorial steps.</p>
+                    <div className="progress-track"><span className="indeterminate" /></div>
+                    <button className="secondary-button" onClick={() => void cancelAnalysis()}>Cancel analysis</button>
+                  </>}
+                  {activeAnalysis.status === "completed" && analysisDraft && <>
+                    <div className="draft-summary"><strong>AI draft ready for review</strong><p>{analysisDraft.summary}</p><div className="draft-counts"><span>{analysisDraft.steps.length} tutorial steps</span><span>{analysisDraft.zoomSuggestions.length} zoom suggestions</span></div></div>
+                    <div className="draft-step-list">{analysisDraft.steps.map((step, index) => <article className="draft-step" key={step.id}><span className="draft-index">{String(index + 1).padStart(2, "0")}</span><div><strong>{step.title}</strong><p>{step.description}</p><small>{formatDuration(step.startMs / 1000)} – {formatDuration(step.endMs / 1000)} · {step.evidenceFrameIds.length} evidence frames · {step.evidenceKind}</small></div></article>)}</div>
+                    <small>This draft is not approved for rendering and does not overwrite your original recording.</small>
+                  </>}
+                  {activeAnalysis.status === "failed" && <div className="inline-warning">Analysis failed ({activeAnalysis.errorCode ?? "unknown error"}). Your original recording is unchanged. You can start another run.</div>}
+                  {activeAnalysis.status === "cancelled" && <p>Analysis cancelled. Your original recording is unchanged.</p>}
+                </section>
+              )}
+
               <section className="record-card">
                 <div className="record-card-heading"><div><span className="eyebrow">RECORDING STUDIO</span><h2>Capture your workflow</h2><p>Full desktop · X11 · 30 FPS · MP4</p></div>
                   <span className={"recording-state " + (capture.isRecording ? "live" : "")}><i />{capture.isRecording ? "RECORDING" : "READY"}</span></div>
@@ -206,7 +367,7 @@ export default function App() {
               <section className="recordings-card"><div className="section-heading"><div><span className="eyebrow">PROJECT LIBRARY</span><h2>Recordings</h2></div><span className="count-pill">{recordings.length}</span></div>
                 {recordings.length === 0 ? <div className="recordings-empty"><span className="empty-video-icon">▹</span><strong>No recordings yet</strong><p>Your saved desktop recordings will appear here.</p></div>
                   : <div className="recording-list">{recordings.map((recording) => <div className="recording-row" key={recording.id}>
-                    <div className="recording-file-icon">MP4</div><div className="recording-details"><strong>{recording.fileName}</strong><span>{formatDate(recording.createdAt)} · {formatDuration(recording.durationSeconds)}</span></div><span className="saved-label">SAVED</span>
+                    <div className="recording-file-icon">MP4</div><div className="recording-details"><strong>{recording.fileName}</strong><span>{formatDate(recording.createdAt)} · {formatDuration(recording.durationSeconds)}</span></div><button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || capture.isRecording || !ffmpeg || ffmpeg.status !== "available" || (activeAnalysis !== null && !["completed", "failed", "cancelled"].includes(activeAnalysis.status))}>Analyze</button><span className="saved-label">SAVED</span>
                   </div>)}</div>}
               </section>
             </div>

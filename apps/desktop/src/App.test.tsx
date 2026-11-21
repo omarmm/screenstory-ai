@@ -15,6 +15,7 @@ const project = { id: "p12345-123", name: "Demo project", createdAt: "1730000000
 function standard(command: string) {
   switch (command) {
     case "get_app_info": return Promise.resolve(appInfo);
+    case "get_gemini_key_status": return Promise.resolve({ configured: false });
     case "check_dependencies": return Promise.resolve(report);
     case "get_recording_status": return Promise.resolve({ isRecording: false, fileName: null, startedAtMs: null });
     case "list_projects": return Promise.resolve([]);
