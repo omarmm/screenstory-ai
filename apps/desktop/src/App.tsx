@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 type AppInfo = { name: string; version: string; runtime: string };
 type Dependency = { id: string; feature: string; status: "available" | "missing" | "unsupported" | "error"; version: string | null; impact: string; canInstall: boolean; remediation: string | null };
@@ -94,6 +94,7 @@ export default function App() {
   const [savedTimelineSignature, setSavedTimelineSignature] = useState<string | null>(null);
   const [renderStatus, setRenderStatus] = useState<RenderStatus | null>(null);
   const [renderBusy, setRenderBusy] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const ffmpeg = dependencies?.dependencies.find((item) => item.id === "ffmpeg");
   const elapsedSeconds = useMemo(() => capture.startedAtMs === null ? 0 : Math.floor((clock - capture.startedAtMs) / 1000), [capture.startedAtMs, clock]);
@@ -413,6 +414,7 @@ export default function App() {
       });
       const initial = await invoke<RenderStatus>("get_render_status", { runId: started.runId });
       setRenderStatus(initial);
+      setPreviewUrl(null);
       setNotice("MP4 export started · timeline revision " + started.timelineRevision + ".");
     } catch (reason) { setError(friendlyError(reason)); }
     finally { setRenderBusy(false); }
@@ -666,7 +668,9 @@ export default function App() {
                         </div>
                         <div className="progress-track"><span style={{ width: renderStatus.progress + "%" }} /></div>
                         <small>{renderStatus.status === "completed" ? "Export verified · " + (renderStatus.outputSizeBytes / (1024 * 1024)).toFixed(1) + " MiB" : renderStatus.status === "failed" ? "Export failed · " + (renderStatus.errorCode ?? "unknown error") : renderStatus.status === "cancelled" ? "Export cancelled. No partial MP4 was kept." : renderStatus.progress + "% · Processing source video"}</small>
-                        {renderStatus.status === "completed" && renderStatus.outputPath && <div className="export-result"><strong>Your tutorial is ready</strong><p>{renderStatus.outputPath}</p><span>{renderStatus.activeZoomCount} zoom effects · {renderStatus.annotationCount} captions · {renderStatus.hasAudio ? "source audio preserved" : "no source audio"}</span></div>}
+                        {renderStatus.status === "completed" && renderStatus.outputPath && <div className="export-result"><strong>Your tutorial is ready</strong><p>{renderStatus.outputPath}</p><span>{renderStatus.activeZoomCount} zoom effects · {renderStatus.annotationCount} captions · {renderStatus.hasAudio ? "source audio preserved" : "no source audio"}</span>
+                          <video className="tutorial-preview" controls preload="metadata" src={previewUrl ?? convertFileSrc(renderStatus.outputPath)} />
+                        </div>}
                         {!["completed", "failed", "cancelled"].includes(renderStatus.status) && <div className="analysis-actions"><button className="secondary-button compact" onClick={() => void cancelExport()} disabled={renderBusy}>Cancel export</button></div>}
                       </section>
                     )}
