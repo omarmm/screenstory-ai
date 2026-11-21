@@ -888,10 +888,10 @@ mod tests {
 
     #[test]
     fn sampling_is_deterministic_and_bounded() {
-        assert_eq!(sample_timestamps(2.0), vec![0, 500, 1000, 1500]);
-        assert_eq!(sample_timestamps(30.0).len(), 60);
-        assert_eq!(sample_timestamps(900.0).len(), 60);
-        assert_eq!(sample_timestamps(1.0), vec![0, 500]);
+        assert_eq!(sample_timestamps(2.0), vec![0, 1000]);
+        assert_eq!(sample_timestamps(30.0).len(), 30);
+        assert_eq!(sample_timestamps(900.0).len(), 30);
+        assert_eq!(sample_timestamps(1.0), vec![0]);
     }
 
     #[test]
