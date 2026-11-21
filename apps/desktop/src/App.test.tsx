@@ -43,6 +43,15 @@ function standard(command: string) {
     case "open_project": return Promise.resolve(project);
     case "start_recording": return Promise.resolve({ fileName: "recording-1.mp4", startedAtMs: Date.now() });
     case "stop_recording": return Promise.resolve({ id: "recording-1", fileName: "recording-1.mp4", createdAt: "1730000000000", durationSeconds: 12 });
+    case "start_render": return Promise.resolve({ runId: "r1730000000000-123", timelineId: timeline.timelineId, timelineRevision: timeline.revision, outputFileName: "Screenstory-tutorial-r1730000000000-123.mp4" });
+    case "get_render_status": return Promise.resolve({
+      runId: "r1730000000000-123", recordingId: "recording-1", timelineId: timeline.timelineId,
+      timelineRevision: timeline.revision, status: "completed", progress: 100,
+      outputFileName: "Screenstory-tutorial-r1730000000000-123.mp4",
+      outputPath: "/home/test/Videos/Screenstory/Projects/p12345-123/exports/tutorial.mp4",
+      outputSizeBytes: 2 * 1024 * 1024, durationSeconds: 12, errorCode: null,
+      rendererVersion: "ffmpeg test", hasAudio: true, annotationCount: 1, activeZoomCount: 1,
+    });
     default: return Promise.reject(new Error("Unexpected command: " + command));
   }
 }
@@ -135,6 +144,25 @@ describe("Screenstory desktop application", () => {
       }),
     })));
   });
+  it("exports only the saved timeline revision and displays the verified MP4 result", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_projects") return Promise.resolve([project]);
+      if (command === "get_active_project") return Promise.resolve(project);
+      if (command === "list_recordings") return Promise.resolve([recording]);
+      if (command === "get_timeline_for_recording") return Promise.resolve(timeline);
+      return standard(command);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open timeline" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Export MP4" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("start_render", {
+      recordingId: timeline.recordingId,
+      expectedRevision: timeline.revision,
+    }));
+    expect(await screen.findByText("Your tutorial is ready")).toBeTruthy();
+    expect(screen.getByText(/tutorial\.mp4/)).toBeTruthy();
+  });
+
   it("surfaces a native startup/storage error without crashing", async () => {
     invoke.mockImplementation((command: string) => command === "get_app_info"
       ? Promise.resolve(appInfo)
