@@ -39,12 +39,16 @@ static void black_frame(unsigned char *out, size_t bytes) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s WINDOW_ID\n", argv[0]);
+    if (argc != 4) {
+        fprintf(stderr, "usage: %s WINDOW_ID OUTPUT_WIDTH OUTPUT_HEIGHT\\n", argv[0]);
         return 2;
     }
     Window win = (Window)strtoul(argv[1], NULL, 0);
-    if (!win) { fprintf(stderr, "invalid window id\n"); return 2; }
+    const int out_w = atoi(argv[2]);
+    const int out_h = atoi(argv[3]);
+    if (!win || out_w < 1 || out_h < 1 || out_w > 8192 || out_h > 8192) {
+        fprintf(stderr, "invalid window id or output dimensions\\n"); return 2;
+    }
 
     Display *d = XOpenDisplay(NULL);
     if (!d) { fprintf(stderr, "cannot open X display\n"); return 3; }
@@ -63,12 +67,13 @@ int main(int argc, char **argv) {
     if (!XGetWindowAttributes(d, win, &attr) || x_error || attr.width < 1 || attr.height < 1) {
         fprintf(stderr, "window is unavailable\n"); XCloseDisplay(d); return 5;
     }
-    const int out_w = attr.width, out_h = attr.height;
     const size_t out_bytes = (size_t)out_w * (size_t)out_h * 3U;
     unsigned char *out = malloc(out_bytes);
     if (!out) { fprintf(stderr, "out of memory\n"); XCloseDisplay(d); return 6; }
 
-    fprintf(stderr, "XComposite capture started: window=0x%lx source=%dx%d output=%dx%d\\n",\n            win, attr.width, attr.height, out_w, out_h);\n    XSelectInput(d, win, StructureNotifyMask);
+    fprintf(stderr, "XComposite capture started: window=0x%lx source=%dx%d output=%dx%d\\n",
+            win, attr.width, attr.height, out_w, out_h);
+    XSelectInput(d, win, StructureNotifyMask);
     x_error = 0;
     XCompositeRedirectWindow(d, win, CompositeRedirectAutomatic);
     XSync(d, False);
