@@ -22,7 +22,7 @@ use tauri::State;
 
 const GEMINI_MODEL: &str = "gemini-4-hydrogen";
 const GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
-const MAX_FRAMES: usize = 60;
+const MAX_FRAMES: usize = 30;
 const MAX_INLINE_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 const MAX_EDGE: u32 = 1024;
 
@@ -281,7 +281,7 @@ fn scaled_dimension(width: u32, height: u32) -> (u32, u32) {
 }
 
 fn sample_timestamps(duration_seconds: f64) -> Vec<u64> {
-    let count = ((duration_seconds * 2.0).ceil() as usize).clamp(1, MAX_FRAMES);
+    let count = duration_seconds.ceil().clamp(1.0, MAX_FRAMES as f64) as usize;
     (0..count)
         .map(|index| ((index as f64 * duration_seconds / count as f64) * 1000.0).floor() as u64)
         .collect()
@@ -385,7 +385,7 @@ fn extract_worker(
             source_duration_ms: (duration * 1000.0).round() as u64,
             source_width: width,
             source_height: height,
-            sampling_strategy: "periodic_uniform_max_2fps_60_frames".to_string(),
+            sampling_strategy: "periodic_uniform_max_1fps_30_frames".to_string(),
             sample_count: frames.len(),
             max_edge: MAX_EDGE,
             total_bytes,
