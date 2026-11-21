@@ -101,9 +101,11 @@ struct ProbeFormat {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisDraft {
+    #[serde(alias = "schema_version")]
     pub schema_version: u32,
     pub summary: String,
     pub steps: Vec<TutorialStep>,
+    #[serde(alias = "zoom_suggestions")]
     pub zoom_suggestions: Vec<ZoomSuggestion>,
     #[serde(default)]
     pub language: String,
@@ -117,10 +119,14 @@ pub struct TutorialStep {
     pub id: String,
     pub title: String,
     pub description: String,
+    #[serde(alias = "start_ms")]
     pub start_ms: u64,
+    #[serde(alias = "end_ms")]
     pub end_ms: u64,
+    #[serde(alias = "evidence_frame_ids")]
     pub evidence_frame_ids: Vec<String>,
     pub confidence: f64,
+    #[serde(alias = "evidence_kind")]
     pub evidence_kind: String,
 }
 
@@ -128,14 +134,18 @@ pub struct TutorialStep {
 #[serde(rename_all = "camelCase")]
 pub struct ZoomSuggestion {
     pub id: String,
+    #[serde(alias = "start_ms")]
     pub start_ms: u64,
+    #[serde(alias = "end_ms")]
     pub end_ms: u64,
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    #[serde(alias = "target_scale")]
     pub target_scale: f64,
     pub rationale: String,
+    #[serde(alias = "evidence_frame_ids")]
     pub evidence_frame_ids: Vec<String>,
 }
 
@@ -908,6 +918,50 @@ mod tests {
             response_text(&payload).as_deref(),
             Some("{\"schema_version\":1,\n\"summary\":\"Captured workflow\"}")
         );
+    }
+
+
+    #[test]
+    fn deserializes_snake_case_gemini_schema_and_serializes_camel_case_app_contract() {
+        let model_output = json!({
+            "schema_version": 1,
+            "summary": "Captured workflow",
+            "steps": [{
+                "id": "step-1",
+                "title": "Open settings",
+                "description": "Open the application settings.",
+                "start_ms": 100,
+                "end_ms": 900,
+                "evidence_frame_ids": ["frame-000"],
+                "confidence": 0.95,
+                "evidence_kind": "observed"
+            }],
+            "zoom_suggestions": [{
+                "id": "zoom-1",
+                "start_ms": 200,
+                "end_ms": 700,
+                "x": 0.1,
+                "y": 0.1,
+                "width": 0.5,
+                "height": 0.5,
+                "target_scale": 1.5,
+                "rationale": "Emphasize the settings control.",
+                "evidence_frame_ids": ["frame-000"]
+            }]
+        });
+
+        let draft: AnalysisDraft = serde_json::from_value(model_output).unwrap();
+        assert_eq!(draft.schema_version, 1);
+        assert_eq!(draft.steps[0].start_ms, 100);
+        assert_eq!(draft.steps[0].evidence_frame_ids, vec!["frame-000"]);
+        assert_eq!(draft.zoom_suggestions[0].target_scale, 1.5);
+
+        let app_output = serde_json::to_value(&draft).unwrap();
+        assert!(app_output.get("schemaVersion").is_some());
+        assert!(app_output.get("zoomSuggestions").is_some());
+        assert!(app_output["steps"][0].get("startMs").is_some());
+        assert!(app_output["steps"][0].get("evidenceFrameIds").is_some());
+        assert!(app_output["zoomSuggestions"][0].get("targetScale").is_some());
     }
 
     #[test]
