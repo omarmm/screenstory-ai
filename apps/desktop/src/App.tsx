@@ -6,8 +6,15 @@ type AppInfo = { name: string; version: string; runtime: string };
 type Dependency = { id: string; feature: string; status: "available" | "missing" | "unsupported" | "error"; version: string | null; impact: string; canInstall: boolean; remediation: string | null };
 type DependencyReport = { dependencies: Dependency[] };
 type Project = { id: string; name: string; createdAt: string; updatedAt: string; recordingsCount: number };
-type Recording = { id: string; fileName: string; createdAt: string; durationSeconds: number };
-type CaptureStatus = { isRecording: boolean; fileName: string | null; startedAtMs: number | null };
+type Recording = {
+  id: string; fileName: string; createdAt: string; durationSeconds: number;
+  captureBackend?: string; captureSourceType?: string; captureSourceName?: string;
+};
+type CaptureSource = {
+  id: string; name: string; sourceType: "display" | "window"; backend: string;
+  width: number; height: number; isAvailable: boolean; isMinimized: boolean; appHint: string | null;
+};
+type CaptureStatus = { isRecording: boolean; fileName: string | null; startedAtMs: number | null; warning?: string | null };
 type RenderStarted = { runId: string; timelineId: string; timelineRevision: number; outputFileName: string };
 type RenderStatus = {
   runId: string; recordingId: string; timelineId: string; timelineRevision: number; status: string;
@@ -74,6 +81,8 @@ export default function App() {
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [dependencies, setDependencies] = useState<DependencyReport | null>(null);
   const [capture, setCapture] = useState<CaptureStatus>({ isRecording: false, fileName: null, startedAtMs: null });
+  const [captureSources, setCaptureSources] = useState<CaptureSource[]>([]);
+  const [selectedCaptureSourceId, setSelectedCaptureSourceId] = useState("");
   const [clock, setClock] = useState(Date.now());
   const [projectName, setProjectName] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -96,6 +105,8 @@ export default function App() {
   const [renderBusy, setRenderBusy] = useState(false);
 
   const ffmpeg = dependencies?.dependencies.find((item) => item.id === "ffmpeg");
+  const selectedCaptureSource = captureSources.find((source) => source.id === selectedCaptureSourceId);
+  const availableCaptureSources = captureSources.filter((source) => source.isAvailable);
   const elapsedSeconds = useMemo(() => capture.startedAtMs === null ? 0 : Math.floor((clock - capture.startedAtMs) / 1000), [capture.startedAtMs, clock]);
   const timelineDirty = !!timeline && savedTimelineSignature !== JSON.stringify(timeline);
   const renderInProgress = !!renderStatus && !["completed", "failed", "cancelled", "interrupted"].includes(renderStatus.status);
@@ -109,18 +120,31 @@ export default function App() {
     setActiveProject(current);
     setRecordings(current ? await invoke<Recording[]>("list_recordings") : []);
   }
+  async function refreshCaptureSources() {
+    const sources = await invoke<CaptureSource[]>("list_capture_sources");
+    setCaptureSources(sources);
+    setSelectedCaptureSourceId((previous) => (
+      sources.some((source) => source.id === previous && source.isAvailable)
+        ? previous
+        : (sources.find((source) => source.isAvailable)?.id ?? "")
+    ));
+    return sources;
+  }
   async function bootstrap() {
     setLoading(true);
     setError(null);
     try {
-      const [info, report, currentCapture] = await Promise.all([
+      const [info, report, currentCapture, sources] = await Promise.all([
         invoke<AppInfo>("get_app_info"),
         invoke<DependencyReport>("check_dependencies"),
         invoke<CaptureStatus>("get_recording_status"),
+        invoke<CaptureSource[]>("list_capture_sources").catch(() => []),
       ]);
       setAppInfo(info);
       setDependencies(report);
       setCapture(currentCapture);
+      setCaptureSources(sources);
+      setSelectedCaptureSourceId(sources.find((source) => source.isAvailable)?.id ?? "");
       const keyStatus = await invoke<{ configured: boolean }>("get_gemini_key_status").catch(() => {
         setCredentialStoreAvailable(false);
         return { configured: false };
@@ -166,6 +190,23 @@ export default function App() {
   useEffect(() => {
     if (!capture.isRecording) return;
     const timer = window.setInterval(() => setClock(Date.now()), 500);
+    return () => window.clearInterval(timer);
+  }, [capture.isRecording]);
+
+  useEffect(() => {
+    if (!capture.isRecording) return;
+    const timer = window.setInterval(() => {
+      void invoke<CaptureStatus>("get_recording_status")
+        .then((next) => {
+          setCapture(next);
+          if (next.warning) {
+            setNotice(next.warning);
+            void refreshProjects().catch((reason) => setError(friendlyError(reason)));
+            void refreshCaptureSources().catch(() => undefined);
+          }
+        })
+        .catch((reason) => setError(friendlyError(reason)));
+    }, 1200);
     return () => window.clearInterval(timer);
   }, [capture.isRecording]);
 
@@ -434,7 +475,12 @@ export default function App() {
   async function startRecording() {
     setBusy(true); setError(null); setNotice(null);
     try {
-      const started = await invoke<{ fileName: string; startedAtMs: number }>("start_recording");
+      if (!selectedCaptureSourceId || !selectedCaptureSource?.isAvailable) {
+        throw new Error("Choose an available desktop or window source before starting a recording.");
+      }
+      const started = await invoke<{ fileName: string; startedAtMs: number }>("start_recording", {
+        captureSourceId: selectedCaptureSourceId,
+      });
       setCapture({ isRecording: true, fileName: started.fileName, startedAtMs: started.startedAtMs });
       setClock(Date.now());
     } catch (reason) {
@@ -448,7 +494,7 @@ export default function App() {
     try {
       const saved = await invoke<Recording>("stop_recording");
       setCapture({ isRecording: false, fileName: null, startedAtMs: null });
-      setNotice("Saved " + saved.fileName + " · " + formatDuration(saved.durationSeconds));
+      setNotice("Saved " + saved.fileName + " · " + formatDuration(saved.durationSeconds) + " · " + (saved.captureSourceName ?? "capture source"));
       await refreshProjects();
     } catch (reason) {
       setError(friendlyError(reason));
@@ -682,13 +728,34 @@ export default function App() {
               <section className="record-card">
                 <div className="record-card-heading"><div><span className="eyebrow">RECORDING STUDIO</span><h2>Capture your workflow</h2><p>Full desktop · X11 · 30 FPS · MP4</p></div>
                   <span className={"recording-state " + (capture.isRecording ? "live" : "")}><i />{capture.isRecording ? "RECORDING" : "READY"}</span></div>
+                <div className="capture-source-picker">
+                  <div className="capture-source-heading">
+                    <label htmlFor="capture-source">Capture source</label>
+                    <button type="button" className="text-button" onClick={() => void refreshCaptureSources().catch((reason) => setError(friendlyError(reason)))} disabled={capture.isRecording || busy}>
+                      Refresh sources
+                    </button>
+                  </div>
+                  <select id="capture-source" value={selectedCaptureSourceId}
+                    onChange={(event) => setSelectedCaptureSourceId(event.target.value)}
+                    disabled={capture.isRecording || busy || loading || availableCaptureSources.length === 0}>
+                    {captureSources.length === 0 && <option value="">No capture sources detected</option>}
+                    {captureSources.map((source) => (
+                      <option key={source.id} value={source.id} disabled={!source.isAvailable}>
+                        {source.name}{source.appHint ? " · " + source.appHint : ""}{source.isMinimized ? " · minimized" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {captureSources.some((source) => source.backend === "portal-pipewire") && <p className="capture-source-note">This desktop is using Wayland. Portal/PipeWire recording is not enabled in this build yet.</p>}
+                  {captureSources.length > 0 && availableCaptureSources.length === 0 && <p className="capture-source-note">No supported X11 capture source is currently available.</p>}
+                  <p className="capture-source-note">Window geometry is fixed when recording starts. If the selected window closes, minimizes, or resizes, Screenstory finalizes the captured portion.</p>
+                </div>
                 <div className="capture-preview"><div className="capture-window"><div className="capture-window-top"><span /><span /><span /></div>
                   <div className="capture-center"><span className={"capture-pulse " + (capture.isRecording ? "active" : "")} />
                     <strong>{capture.isRecording ? formatDuration(elapsedSeconds) : "Ready when you are"}</strong>
-                    <small>{capture.isRecording ? capture.fileName : "Your entire desktop will be captured."}</small></div></div></div>
+                    <small>{capture.isRecording ? capture.fileName : (selectedCaptureSource?.name ?? "Choose a capture source above.")}</small></div></div></div>
                 <div className="record-controls">
                   {capture.isRecording ? <button className="stop-button" onClick={() => void stopRecording()} disabled={busy}><span className="stop-square" />{busy ? "Finalizing MP4…" : "Stop & save"}</button>
-                    : <button className="record-button" onClick={() => void startRecording()} disabled={busy || loading || ffmpeg?.status !== "available"}><span className="record-circle" />{busy ? "Starting…" : "Start recording"}</button>}
+                    : <button className="record-button" onClick={() => void startRecording()} disabled={busy || loading || ffmpeg?.status !== "available" || !selectedCaptureSource?.isAvailable}><span className="record-circle" />{busy ? "Starting…" : "Start recording"}</button>}
                   <span className="record-hint">{capture.isRecording ? "Keep Screenstory open until the MP4 is finalized." : "Recording begins after you press Start. Nothing is captured before then."}</span>
                 </div>
                 {ffmpeg?.status !== "available" && <div className="dependency-warning"><strong>FFmpeg is required to record.</strong>
@@ -699,7 +766,7 @@ export default function App() {
               <section className="recordings-card"><div className="section-heading"><div><span className="eyebrow">PROJECT LIBRARY</span><h2>Recordings</h2></div><span className="count-pill">{recordings.length}</span></div>
                 {recordings.length === 0 ? <div className="recordings-empty"><span className="empty-video-icon">▹</span><strong>No recordings yet</strong><p>Your saved desktop recordings will appear here.</p></div>
                   : <div className="recording-list">{recordings.map((recording) => <div className="recording-row" key={recording.id}>
-                    <div className="recording-file-icon">MP4</div><div className="recording-details"><strong>{recording.fileName}</strong><span>{formatDate(recording.createdAt)} · {formatDuration(recording.durationSeconds)}</span></div><button className="secondary-button compact" onClick={() => void openTimeline(recording)} disabled={timelineBusy}>Open timeline</button><button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || capture.isRecording || !ffmpeg || ffmpeg.status !== "available" || (activeAnalysis !== null && !["completed", "failed", "cancelled", "interrupted", "missing"].includes(activeAnalysis.status))}>Analyze</button><span className="saved-label">SAVED</span>
+                    <div className="recording-file-icon">MP4</div><div className="recording-details"><strong>{recording.fileName}</strong><span>{formatDate(recording.createdAt)} · {formatDuration(recording.durationSeconds)}{recording.captureSourceName ? " · " + recording.captureSourceName : ""}</span></div><button className="secondary-button compact" onClick={() => void openTimeline(recording)} disabled={timelineBusy}>Open timeline</button><button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || capture.isRecording || !ffmpeg || ffmpeg.status !== "available" || (activeAnalysis !== null && !["completed", "failed", "cancelled", "interrupted", "missing"].includes(activeAnalysis.status))}>Analyze</button><span className="saved-label">SAVED</span>
                   </div>)}</div>}
               </section>
             </div>

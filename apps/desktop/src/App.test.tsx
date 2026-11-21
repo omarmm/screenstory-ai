@@ -11,7 +11,8 @@ const report = { dependencies: [{
   version: "ffmpeg version 6.1.1", impact: "Desktop recording is available.", canInstall: false, remediation: null,
 }] };
 const project = { id: "p12345-123", name: "Demo project", createdAt: "1730000000000", updatedAt: "1730000000000", recordingsCount: 1 };
-const recording = { id: "recording-1", fileName: "recording-1.mp4", createdAt: "1730000000000", durationSeconds: 12 };
+const recording = { id: "recording-1", fileName: "recording-1.mp4", createdAt: "1730000000000", durationSeconds: 12, captureSourceName: "Entire desktop" };
+const captureSource = { id: "capture-test-display", name: "Entire desktop · 1920 × 1080", sourceType: "display", backend: "x11", width: 1920, height: 1080, isAvailable: true, isMinimized: false, appHint: null };
 const timeline = {
   schemaVersion: 2, timelineId: "t12345-77", recordingId: "recording-1",
   sourceFileName: "recording-1.mp4", sourceDurationMs: 12000, sourceAnalysisRunId: "a12345-77",
@@ -34,7 +35,8 @@ function standard(command: string) {
     case "get_app_info": return Promise.resolve(appInfo);
     case "get_gemini_key_status": return Promise.resolve({ configured: false });
     case "check_dependencies": return Promise.resolve(report);
-    case "get_recording_status": return Promise.resolve({ isRecording: false, fileName: null, startedAtMs: null });
+    case "get_recording_status": return Promise.resolve({ isRecording: false, fileName: null, startedAtMs: null, warning: null });
+    case "list_capture_sources": return Promise.resolve([captureSource]);
     case "list_projects": return Promise.resolve([]);
     case "get_active_project": return Promise.resolve(null);
     case "list_recordings": return Promise.resolve([]);
@@ -93,10 +95,27 @@ describe("Screenstory desktop application", () => {
       return standard(command);
     });
     render(<App />);
+    expect((await screen.findByLabelText("Capture source") as HTMLSelectElement).value).toBe(captureSource.id);
     fireEvent.click(await screen.findByRole("button", { name: /Start recording/ }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("start_recording", { captureSourceId: captureSource.id }));
     expect(await screen.findByRole("button", { name: /Stop & save/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Stop & save/ }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("stop_recording"));
+  });
+
+  it("disables minimized windows and allows refreshing capture sources", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_capture_sources") return Promise.resolve([
+        captureSource,
+        { ...captureSource, id: "capture-minimized-window", name: "Minimized browser", sourceType: "window", isAvailable: false, isMinimized: true },
+      ]);
+      return standard(command);
+    });
+    render(<App />);
+    const select = await screen.findByLabelText("Capture source") as HTMLSelectElement;
+    expect(select.querySelector('option[value="capture-minimized-window"]')?.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh sources" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_capture_sources"));
   });
 
   it("opens, edits, and saves a versioned timeline revision", async () => {
