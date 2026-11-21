@@ -124,7 +124,7 @@ fn app_hint(
     let class = String::from_utf8_lossy(&value)
         .split('\0')
         .filter(|part| !part.trim().is_empty())
-        .last()?
+        .next_back()?
         .trim()
         .to_string();
     if class.is_empty() || class.len() > 128 {
