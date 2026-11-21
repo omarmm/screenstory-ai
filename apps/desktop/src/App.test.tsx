@@ -105,6 +105,9 @@ describe("Screenstory desktop application", () => {
 
   it("disables minimized windows and allows refreshing capture sources", async () => {
     invoke.mockImplementation((command: string) => {
+      if (command === "list_projects") return Promise.resolve([project]);
+      if (command === "get_active_project") return Promise.resolve(project);
+      if (command === "list_recordings") return Promise.resolve([recording]);
       if (command === "list_capture_sources") return Promise.resolve([
         captureSource,
         { ...captureSource, id: "capture-minimized-window", name: "Minimized browser", sourceType: "window", isAvailable: false, isMinimized: true },
