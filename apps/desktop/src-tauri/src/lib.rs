@@ -280,11 +280,28 @@ fn resolve_project_dir(id: &str) -> Result<PathBuf, AppError> {
     Ok(directory)
 }
 
+fn apt_installer_available() -> bool {
+    Path::new("/usr/bin/pkexec").is_file() && Path::new("/usr/bin/apt-get").is_file()
+}
+
+fn has_font_family(pattern: &str, expected: &str) -> bool {
+    Command::new("fc-match")
+        .args(["-f", "%{family}", pattern])
+        .output()
+        .map(|output| {
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout)
+                    .to_lowercase()
+                    .contains(&expected.to_lowercase())
+        })
+        .unwrap_or(false)
+}
+
 fn ffmpeg_status() -> DependencyStatus {
     match Command::new("ffmpeg").arg("-version").output() {
         Ok(output) if output.status.success() => DependencyStatus {
             id: "ffmpeg",
-            feature: "X11 desktop recording and video processing",
+            feature: "Desktop recording and video processing",
             status: "available",
             version: Some(
                 String::from_utf8_lossy(&output.stdout)
@@ -293,26 +310,124 @@ fn ffmpeg_status() -> DependencyStatus {
                     .unwrap_or("FFmpeg available")
                     .to_string(),
             ),
-            impact: "Desktop recording is available.",
+            impact: "Desktop recording and MP4 export are available.",
             can_install: false,
             remediation: None,
         },
         _ => DependencyStatus {
             id: "ffmpeg",
-            feature: "X11 desktop recording and video processing",
+            feature: "FFmpeg · recording and video export",
             status: "missing",
             version: None,
-            impact: "Recording is unavailable until FFmpeg is installed.",
-            can_install: false,
-            remediation: Some(
-                "Install FFmpeg from your Linux distribution's Software Manager, then recheck.",
-            ),
+            impact: "Recording and video export are unavailable until FFmpeg is installed.",
+            can_install: apt_installer_available(),
+            remediation: Some(if apt_installer_available() {
+                "Screenstory can install FFmpeg using your system's package manager. You will be asked to approve it."
+            } else {
+                "Install FFmpeg with your Linux distribution's package manager, then recheck."
+            }),
         },
     }
 }
+
+fn caption_fonts_status() -> DependencyStatus {
+    let fontconfig_available = Command::new("fc-match").arg("--version").output()
+        .map(|output| output.status.success()).unwrap_or(false);
+    let regular_font = fontconfig_available && has_font_family("Noto Sans", "noto sans");
+    let arabic_font = fontconfig_available && has_font_family("Noto Sans Arabic:lang=ar", "noto sans arabic");
+    if regular_font && arabic_font {
+        DependencyStatus {
+            id: "caption-fonts",
+            feature: "Noto Sans · English and Arabic captions",
+            status: "available",
+            version: Some("Noto Sans and Noto Sans Arabic".to_string()),
+            impact: "English and Arabic caption fonts are available.",
+            can_install: false,
+            remediation: None,
+        }
+    } else {
+        DependencyStatus {
+            id: "caption-fonts",
+            feature: "Noto Sans · English and Arabic captions",
+            status: "missing",
+            version: None,
+            impact: "Caption rendering needs Fontconfig, Noto Sans, and Noto Sans Arabic.",
+            can_install: apt_installer_available(),
+            remediation: Some(if apt_installer_available() {
+                "Screenstory can install Fontconfig and Noto fonts using your system's package manager. You will be asked to approve it."
+            } else {
+                "Install fontconfig and fonts-noto-core with your Linux distribution's package manager, then recheck."
+            }),
+        }
+    }
+}
+
 fn dependency_report() -> DependencyReport {
     DependencyReport {
-        dependencies: vec![ffmpeg_status()],
+        dependencies: vec![ffmpeg_status(), caption_fonts_status()],
+    }
+}
+
+#[tauri::command]
+fn install_dependency(dependency_id: String) -> Result<DependencyReport, AppError> {
+    let packages: &[&str] = match dependency_id.as_str() {
+        "ffmpeg" => &["ffmpeg"],
+        "caption-fonts" => &["fontconfig", "fonts-noto-core"],
+        _ => return Err(AppError::new(
+            "DEPENDENCY_NOT_SUPPORTED",
+            "Screenstory cannot install that dependency automatically.",
+        )),
+    };
+    let current = dependency_report();
+    if current.dependencies.iter().find(|item| item.id == dependency_id)
+        .is_some_and(|item| item.status == "available")
+    {
+        return Ok(current);
+    }
+    if !apt_installer_available() {
+        return Err(AppError::new(
+            "SYSTEM_INSTALLER_UNAVAILABLE",
+            "Automatic installation requires the APT package manager and the PolicyKit authorization service. Use your Software Manager, then recheck dependencies.",
+        ));
+    }
+
+    let output = Command::new("/usr/bin/pkexec")
+        .arg("/usr/bin/apt-get")
+        .arg("install")
+        .arg("-y")
+        .args(packages)
+        .output()
+        .map_err(|_| AppError::new(
+            "DEPENDENCY_INSTALL_FAILED",
+            "Could not start the system package installer. Check that a graphical authentication agent is running.",
+        ))?;
+
+    if !output.status.success() {
+        if output.status.code() == Some(126) || output.status.code() == Some(127) {
+            return Err(AppError::new(
+                "DEPENDENCY_INSTALL_CANCELLED",
+                "System installation was cancelled or not authorized. Approve the system authentication prompt to continue.",
+            ));
+        }
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.lines().rev().find(|line| !line.trim().is_empty())
+            .unwrap_or("The system package manager reported an error.");
+        return Err(AppError::new(
+            "DEPENDENCY_INSTALL_FAILED",
+            format!("The system package manager could not install the required dependency: {detail}"),
+        ));
+    }
+
+    let updated = dependency_report();
+    if updated.dependencies.iter().find(|item| item.id == dependency_id)
+        .is_some_and(|item| item.status == "available")
+    {
+        Ok(updated)
+    } else {
+        Err(AppError::new(
+            "DEPENDENCY_INSTALL_UNVERIFIED",
+            "The package manager finished, but Screenstory could not verify the dependency. Recheck the system packages and try again.",
+        ))
     }
 }
 
@@ -1035,6 +1150,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_info,
             check_dependencies,
+            install_dependency,
             list_projects,
             get_active_project,
             create_project,
