@@ -608,39 +608,20 @@ fn stream_dependency_pipe<R: Read + Send + 'static>(
     })
 }
 
-fn install_dependency_blocking(
+fn run_apt_operation(
     dependency_id: &str,
-    app: AppHandle,
-) -> Result<DependencyReport, AppError> {
-    let packages = dependency_packages(dependency_id).ok_or_else(|| AppError::new(
-        "DEPENDENCY_NOT_SUPPORTED",
-        "Screenstory cannot install that dependency automatically.",
-    ))?;
-    let current = dependency_report();
-    if current.dependencies.iter().find(|item| item.id == dependency_id)
-        .is_some_and(|item| item.status == "available")
-    {
-        return Ok(current);
-    }
-    if !apt_installer_available() {
-        return Err(AppError::new(
-            "SYSTEM_INSTALLER_UNAVAILABLE",
-            "Automatic installation requires APT and the PolicyKit authorization service. Use your Software Manager, then recheck dependencies.",
-        ));
-    }
-
+    app: &AppHandle,
+    args: &[&str],
+    status_message: &str,
+) -> Result<(), AppError> {
     let _ = app.emit("dependency-install-output", DependencyInstallEvent {
         dependency_id: dependency_id.to_string(),
         stream: "status".to_string(),
-        line: format!("Requesting administrator approval to install: {}", packages.join(", ")),
+        line: status_message.to_string(),
     });
     let mut child = Command::new("/usr/bin/pkexec")
         .arg("/usr/bin/apt-get")
-        .arg("install")
-        .arg("-y")
-        .arg("-o")
-        .arg("Dpkg::Use-Pty=0")
-        .args(packages)
+        .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -672,39 +653,78 @@ fn install_dependency_blocking(
     let _ = stdout_thread.join();
     let _ = stderr_thread.join();
 
-    if !status.success() {
-        let output = captured.lock()
-            .map(|lines| lines.iter().rev().take(5).cloned().collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | "))
-            .unwrap_or_default();
-        let lower = output.to_lowercase();
-        if status.code() == Some(126)
-            || status.code() == Some(127)
-            || lower.contains("not authorized")
-            || lower.contains("authentication agent")
-            || lower.contains("authorization was cancelled")
-        {
-            return Err(AppError::new(
-                "DEPENDENCY_INSTALL_CANCELLED",
-                "System installation was cancelled or could not be authorized. Screenstory is still open; approve the system prompt or use your Software Manager.",
-            ));
-        }
-        if lower.contains("could not get lock")
-            || lower.contains("unable to acquire the dpkg frontend lock")
-        {
-            return Err(AppError::new(
-                "PACKAGE_MANAGER_BUSY",
-                "Another package manager is running. Close Software Manager or wait for system updates to finish, then retry.",
-            ));
-        }
+    if status.success() {
+        return Ok(());
+    }
+
+    let output = captured.lock()
+        .map(|lines| lines.iter().rev().take(5).cloned().collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | "))
+        .unwrap_or_default();
+    let lower = output.to_lowercase();
+    if status.code() == Some(126)
+        || status.code() == Some(127)
+        || lower.contains("not authorized")
+        || lower.contains("authentication agent")
+        || lower.contains("authorization was cancelled")
+    {
         return Err(AppError::new(
-            "DEPENDENCY_INSTALL_FAILED",
-            if output.is_empty() {
-                "The system package manager could not install the requested dependency. Check your network connection and APT repositories.".to_string()
-            } else {
-                format!("The system package manager could not finish installation: {output}")
-            },
+            "DEPENDENCY_INSTALL_CANCELLED",
+            "System installation was cancelled or could not be authorized. Screenstory is still open; approve the system prompt or use your Software Manager.",
         ));
     }
+    if lower.contains("could not get lock")
+        || lower.contains("unable to acquire the dpkg frontend lock")
+    {
+        return Err(AppError::new(
+            "PACKAGE_MANAGER_BUSY",
+            "Another package manager is running. Close Software Manager or wait for system updates to finish, then retry.",
+        ));
+    }
+    Err(AppError::new(
+        "DEPENDENCY_INSTALL_FAILED",
+        if output.is_empty() {
+            "The system package manager could not complete the operation. Check your network connection and APT repositories.".to_string()
+        } else {
+            format!("The system package manager could not complete the operation: {output}")
+        },
+    ))
+}
+
+fn install_dependency_blocking(
+    dependency_id: &str,
+    app: AppHandle,
+) -> Result<DependencyReport, AppError> {
+    let packages = dependency_packages(dependency_id).ok_or_else(|| AppError::new(
+        "DEPENDENCY_NOT_SUPPORTED",
+        "Screenstory cannot install that dependency automatically.",
+    ))?;
+    let current = dependency_report();
+    if current.dependencies.iter().find(|item| item.id == dependency_id)
+        .is_some_and(|item| item.status == "available")
+    {
+        return Ok(current);
+    }
+    if !apt_installer_available() {
+        return Err(AppError::new(
+            "SYSTEM_INSTALLER_UNAVAILABLE",
+            "Automatic installation requires APT and the PolicyKit authorization service. Use your Software Manager, then recheck dependencies.",
+        ));
+    }
+
+    run_apt_operation(
+        dependency_id,
+        &app,
+        &["update"],
+        "Refreshing APT package indexes…",
+    )?;
+    let mut install_args = vec!["install", "-y", "-o", "Dpkg::Use-Pty=0"];
+    install_args.extend_from_slice(packages);
+    run_apt_operation(
+        dependency_id,
+        &app,
+        &install_args,
+        &format!("Installing packages: {}…", packages.join(", ")),
+    )?;
 
     let updated = dependency_report();
     if updated.dependencies.iter().find(|item| item.id == dependency_id)
