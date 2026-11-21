@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 mod analysis;
 mod timeline;
@@ -122,6 +122,7 @@ struct RecordingSummary {
     capture_backend: String,
     capture_source_type: String,
     capture_source_name: String,
+    has_timeline: bool,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -583,9 +584,12 @@ fn list_recordings(state: State<'_, AppState>) -> Result<Vec<RecordingSummary>, 
             "Create or open a project before viewing recordings.",
         )
     })?;
+    timeline::ensure_timeline_table(directory)?;
     let connection = db_connection(directory)?;
     let mut statement = connection.prepare(
-        "SELECT id, file_name, created_at, duration_seconds, capture_backend, capture_source_type, capture_source_name FROM recordings ORDER BY created_at DESC"
+        "SELECT id, file_name, created_at, duration_seconds, capture_backend, capture_source_type, capture_source_name,
+                EXISTS(SELECT 1 FROM timelines WHERE timelines.recording_id = recordings.id)
+         FROM recordings ORDER BY created_at DESC"
     ).map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not read this project's recordings."))?;
     let rows = statement
         .query_map([], |row| {
@@ -597,20 +601,229 @@ fn list_recordings(state: State<'_, AppState>) -> Result<Vec<RecordingSummary>, 
                 capture_backend: row.get(4)?,
                 capture_source_type: row.get(5)?,
                 capture_source_name: row.get(6)?,
+                has_timeline: row.get(7)?,
             })
         })
-        .map_err(|_| {
-            AppError::new(
-                "PROJECT_DATABASE_ERROR",
-                "Could not read this project's recordings.",
-            )
-        })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|_| {
-        AppError::new(
+        .map_err(|_| AppError::new(
             "PROJECT_DATABASE_ERROR",
             "Could not read this project's recordings.",
-        )
-    })
+        ))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|_| AppError::new(
+        "PROJECT_DATABASE_ERROR",
+        "Could not read this project's recordings.",
+    ))
+}
+
+fn valid_render_run_id(value: &str) -> bool {
+    value.starts_with('r')
+        && value.len() > 2
+        && value.chars().all(|character| character == 'r' || character == '-' || character.is_ascii_digit())
+}
+
+fn remove_managed_directory(root: &Path, child_name: &str, code: &'static str, message: &'static str) -> Result<(), AppError> {
+    if child_name.is_empty()
+        || child_name == "."
+        || child_name == ".."
+        || Path::new(child_name).components().count() != 1
+        || Path::new(child_name).file_name().and_then(|name| name.to_str()) != Some(child_name)
+    {
+        return Err(AppError::new("DELETE_PATH_INVALID", "A managed folder identifier is invalid."));
+    }
+    let root = root.canonicalize().map_err(|_| AppError::new(code, message))?;
+    let target = root.join(child_name);
+    let metadata = match fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(AppError::new(code, message)),
+    };
+    if metadata.file_type().is_symlink() {
+        return fs::remove_file(&target).map_err(|_| AppError::new(code, message));
+    }
+    let canonical = target.canonicalize().map_err(|_| AppError::new(code, message))?;
+    if !canonical.starts_with(&root) || canonical == root {
+        return Err(AppError::new("DELETE_PATH_INVALID", "A managed folder resolved outside its project."));
+    }
+    fs::remove_dir_all(canonical).map_err(|_| AppError::new(code, message))
+}
+
+fn remove_managed_export(exports_root: &Path, stored_path: &str) -> Result<(), AppError> {
+    let root = match exports_root.canonicalize() {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(AppError::new("RECORDING_DELETE_FAILED", "The recording's export folder could not be inspected.")),
+    };
+    let candidate = PathBuf::from(stored_path);
+    let canonical = match candidate.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(AppError::new("RECORDING_DELETE_FAILED", "A generated export could not be inspected.")),
+    };
+    if !canonical.starts_with(&root) || !canonical.is_file() {
+        // Never remove a path that does not resolve to a file inside this project's exports folder.
+        return Ok(());
+    }
+    fs::remove_file(canonical).map_err(|_| AppError::new(
+        "RECORDING_DELETE_FAILED",
+        "A generated export could not be removed. Check its file permissions and retry.",
+    ))
+}
+
+#[tauri::command]
+fn delete_recording(recording_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    let project_dir = state.active_project.lock()
+        .map_err(|_| AppError::new("STATE_LOCK_ERROR", "Project state is temporarily unavailable."))?
+        .as_ref().cloned()
+        .ok_or_else(|| AppError::new("NO_ACTIVE_PROJECT", "Open a project before deleting a recording."))?;
+
+    if let Some(session) = state.recording.lock()
+        .map_err(|_| AppError::new("STATE_LOCK_ERROR", "Recording state is temporarily unavailable."))?
+        .as_ref()
+    {
+        if session.project_dir == project_dir && session.file_name == recording_id {
+            return Err(AppError::new("RECORDING_IN_PROGRESS", "Stop and save this recording before deleting it."));
+        }
+    }
+    ensure_no_active_render(&state)?;
+    analysis::ensure_analysis_table(&project_dir)?;
+    timeline::ensure_timeline_table(&project_dir)?;
+    render::ensure_render_table(&project_dir)?;
+
+    let (file_name, recording_path) = analysis::resolve_recording(&project_dir, &recording_id)?;
+    let connection = db_connection(&project_dir)?;
+    let active_analyses: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM analysis_runs
+         WHERE recording_id=?1 AND status IN ('extracting_frames','awaiting_cloud_consent','sending_to_provider','validating_output')",
+        params![recording_id],
+        |row| row.get(0),
+    ).map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The recording's analysis activity could not be checked."))?;
+    if active_analyses > 0 {
+        return Err(AppError::new("ANALYSIS_IN_PROGRESS", "Cancel or finish this recording's AI analysis before deleting it."));
+    }
+    let active_renders: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM render_runs
+         WHERE recording_id=?1 AND status IN ('preparing','rendering','validating','cancelling')",
+        params![recording_id],
+        |row| row.get(0),
+    ).map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "The recording's export activity could not be checked."))?;
+    if active_renders > 0 {
+        return Err(AppError::new("RENDER_IN_PROGRESS", "Wait for this recording's export to finish before deleting it."));
+    }
+
+    let analysis_ids = {
+        let mut statement = connection.prepare("SELECT id FROM analysis_runs WHERE recording_id=?1")
+            .map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The recording's analysis history could not be inspected."))?;
+        let rows = statement.query_map(params![recording_id], |row| row.get::<_, String>(0))
+            .map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The recording's analysis history could not be inspected."))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The recording's analysis history could not be read."))?
+    };
+    let timeline_id: Option<String> = connection.query_row(
+        "SELECT timeline_id FROM timelines WHERE recording_id=?1",
+        params![recording_id],
+        |row| row.get(0),
+    ).optional().map_err(|_| AppError::new("TIMELINE_DATABASE_ERROR", "The recording's timeline could not be inspected."))?;
+    let render_rows = {
+        let mut statement = connection.prepare("SELECT id, output_path FROM render_runs WHERE recording_id=?1")
+            .map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "The recording's export history could not be inspected."))?;
+        let rows = statement.query_map(params![recording_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "The recording's export history could not be inspected."))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "The recording's export history could not be read."))?
+    };
+
+    fs::remove_file(&recording_path).map_err(|_| AppError::new(
+        "RECORDING_DELETE_FAILED",
+        "The original recording could not be deleted. Check file permissions and retry.",
+    ))?;
+    for analysis_id in &analysis_ids {
+        if analysis::analysis_run_id_valid(analysis_id) {
+            remove_managed_directory(&project_dir.join("analysis"), analysis_id,
+                "RECORDING_DELETE_FAILED", "An analysis folder could not be removed.")?;
+        }
+    }
+    if let Some(id) = timeline_id.as_deref() {
+        if timeline::valid_timeline_id(id) {
+            remove_managed_directory(&project_dir.join("timeline"), id,
+                "RECORDING_DELETE_FAILED", "The editable timeline folder could not be removed.")?;
+        }
+    }
+    let exports_root = project_dir.join("exports");
+    for (render_id, output_path) in &render_rows {
+        if valid_render_run_id(render_id) {
+            remove_managed_export(&exports_root, output_path)?;
+            let _ = fs::remove_file(exports_root.join(format!("{render_id}.partial.mp4")));
+            let _ = fs::remove_dir_all(exports_root.join(".render-cache").join(render_id));
+        }
+    }
+
+    let mut connection = db_connection(&project_dir)?;
+    let transaction = connection.transaction()
+        .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "The project could not acquire the delete lock."))?;
+    transaction.execute("DELETE FROM render_runs WHERE recording_id=?1", params![recording_id])
+        .map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "The recording's export history could not be removed."))?;
+    transaction.execute("DELETE FROM timelines WHERE recording_id=?1", params![recording_id])
+        .map_err(|_| AppError::new("TIMELINE_DATABASE_ERROR", "The recording's timeline index could not be removed."))?;
+    transaction.execute("DELETE FROM analysis_runs WHERE recording_id=?1", params![recording_id])
+        .map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The recording's analysis history could not be removed."))?;
+    transaction.execute("DELETE FROM recordings WHERE id=?1", params![recording_id])
+        .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "The recording could not be removed from the project library."))?;
+    transaction.execute("UPDATE project SET updated_at=?1", params![now_ms().to_string()])
+        .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "The project timestamp could not be updated."))?;
+    transaction.commit().map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "The recording deletion could not be committed."))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_project(project_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    if !valid_project_id(&project_id) {
+        return Err(AppError::new("INVALID_PROJECT_ID", "That project identifier is not valid."));
+    }
+    if state.recording.lock()
+        .map_err(|_| AppError::new("STATE_LOCK_ERROR", "Recording state is temporarily unavailable."))?
+        .is_some()
+    {
+        return Err(AppError::new("RECORDING_IN_PROGRESS", "Stop and save the active recording before deleting a project."));
+    }
+    ensure_no_active_render(&state)?;
+
+    let project_dir = resolve_project_dir(&project_id)?;
+    analysis::ensure_analysis_table(&project_dir)?;
+    let connection = db_connection(&project_dir)?;
+    let active_analyses: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM analysis_runs
+         WHERE status IN ('extracting_frames','awaiting_cloud_consent','sending_to_provider','validating_output')",
+        [],
+        |row| row.get(0),
+    ).map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The project's AI analysis activity could not be checked."))?;
+    if active_analyses > 0 {
+        return Err(AppError::new("ANALYSIS_IN_PROGRESS", "Cancel or finish AI analysis before deleting this project."));
+    }
+
+    let root = projects_root()?.canonicalize()
+        .map_err(|_| AppError::new("PROJECTS_FOLDER_ERROR", "The local projects folder is unavailable."))?;
+    let target = project_dir.canonicalize()
+        .map_err(|_| AppError::new("PROJECT_NOT_FOUND", "This project folder could not be found."))?;
+    if !target.starts_with(&root) || target == root {
+        return Err(AppError::new("PROJECT_PATH_INVALID", "The project folder resolved outside the managed projects directory."));
+    }
+    fs::remove_dir_all(&target).map_err(|_| AppError::new(
+        "PROJECT_DELETE_FAILED",
+        "The project could not be deleted. Check folder permissions and retry.",
+    ))?;
+
+    let mut active = state.active_project.lock()
+        .map_err(|_| AppError::new("STATE_LOCK_ERROR", "Project state is temporarily unavailable."))?;
+    if active.as_ref().is_some_and(|directory| directory == &project_dir) {
+        *active = None;
+        if let Ok(mut sources) = state.capture_sources.lock() {
+            sources.clear();
+        }
+        if let Ok(mut active_analyses) = state.analysis_cancellations.lock() {
+            active_analyses.clear();
+        }
+    }
+    Ok(())
 }
 #[tauri::command]
 fn get_recording_status(state: State<'_, AppState>) -> Result<RecordingStatus, AppError> {
@@ -793,6 +1006,8 @@ pub fn run() {
             create_project,
             open_project,
             list_recordings,
+            delete_recording,
+            delete_project,
             list_capture_sources,
             get_recording_status,
             start_recording,
