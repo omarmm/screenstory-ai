@@ -3,6 +3,7 @@ use serde::Serialize;
 mod analysis;
 mod timeline;
 mod render;
+mod capture;
 
 use std::{
     collections::HashMap,
