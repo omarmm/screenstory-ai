@@ -19,7 +19,7 @@ from tkinter import filedialog, messagebox, ttk
 
 APP_NAME = "Screenstory"
 BASE_PACKAGES = ["ffmpeg"]
-WINDOW_PACKAGES = ["wmctrl"]
+WINDOW_PACKAGES = ["wmctrl", "build-essential", "pkg-config", "libx11-dev", "libxcomposite-dev"]
 DEFAULT_OUTPUT = Path.home() / "Videos" / "Screenstory"
 
 
@@ -331,32 +331,39 @@ class ScreenstoryRecorder:
             self.log_handle = log_file.open("w", encoding="utf-8")
 
             if window:
-                # Use FFmpeg's native x11grab window_id input.
+                helper = self.build_capture_helper()
+                self.log_handle.write(
+                    f"Screenstory XComposite window capture\nWindow ID: {window[0]}\n"
+                    f"Window title: {self.selected_window.get()}\n"
+                    f"Fixed output: {width}x{height}\n"
+                    f"Started: {dt.datetime.now().isoformat()}\n"
+                )
+                self.log_handle.flush()
+                self.capture_process = subprocess.Popen(
+                    [str(helper), window[0], str(width), str(height)],
+                    stdout=subprocess.PIPE, stderr=self.log_handle, bufsize=0
+                )
                 command = [
-                    "ffmpeg", "-hide_banner", "-y", "-loglevel", "info",
-                    "-f", "x11grab", "-framerate", "30", "-draw_mouse", "1",
-                    "-window_id", window[0], "-i", os.environ["DISPLAY"],
-                    "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                    "ffmpeg", "-hide_banner", "-y", "-loglevel", "warning",
+                    "-f", "rawvideo", "-pixel_format", "rgb24",
+                    "-video_size", f"{width}x{height}", "-framerate", "30",
+                    "-i", "pipe:0", "-an", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                    "-c:v", "libx264", "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                     str(self.output_file),
                 ]
-                self.log_handle.write(
-                    f"Screenstory FFmpeg window capture\nWindow ID: {window[0]}\n"
-                    f"Window title: {self.selected_window.get()}\n"
-                    f"Started: {dt.datetime.now().isoformat()}\n"
-                    f"Command: {command!r}\n"
-                )
-                self.log_handle.flush()
                 self.process = subprocess.Popen(
-                    command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                    stderr=self.log_handle, text=True,
+                    command, stdin=self.capture_process.stdout,
+                    stdout=subprocess.DEVNULL, stderr=self.log_handle
                 )
+                self.capture_process.stdout.close()
             else:
                 command = [
                     "ffmpeg", "-hide_banner", "-y", "-loglevel", "warning",
                     "-f", "x11grab", "-framerate", "30", "-draw_mouse", "1",
                     "-video_size", f"{width}x{height}", "-i", os.environ["DISPLAY"],
-                    "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-an", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                    "-c:v", "libx264", "-preset", "ultrafast",
                     "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                     str(self.output_file),
                 ]
