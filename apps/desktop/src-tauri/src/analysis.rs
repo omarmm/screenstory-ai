@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::{
     collections::HashSet,
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -813,7 +813,10 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
                         .get("retry-after")
                         .and_then(|value| value.to_str().ok())
                         .map(str::to_owned);
-                    let response_body = result.text().unwrap_or_else(|_| "[response body could not be read]".to_string());
+                    let mut response = result;
+                    let mut response_bytes = Vec::with_capacity(4096);
+                    let _ = response.take(4096).read_to_end(&mut response_bytes);
+                    let response_body = String::from_utf8_lossy(&response_bytes).into_owned();
                     append_gemini_http_error(
                         &run_dir,
                         status,
