@@ -361,7 +361,7 @@ fn validate_timeline(
             || !annotation_ids.insert(annotation.id.as_str())
             || annotation.text.trim().is_empty()
             || annotation.text.chars().count() > 500
-            || annotation.text.chars().any(|character| character.is_control() && character != '\\n' && character != '\\t')
+            || annotation.text.chars().any(|character| character.is_control() && character != '\n' && character != '\t')
             || !["ar", "en", "mixed"].contains(&annotation.language.as_str())
             || annotation.start_ms >= annotation.end_ms
             || annotation.end_ms > timeline.source_duration_ms
@@ -646,7 +646,7 @@ pub fn get_timeline_for_recording(
         }
     }
     validate_timeline(&timeline, &manifest)?;
-    if timeline.timeline_id != timeline_id || timeline.revision != revision as u64 || timeline.recording_id != recording_id {
+    if timeline.timeline_id != timeline_id || timeline.revision != (revision as u64 + u64::from(migrated)) || timeline.recording_id != recording_id {
         return Err(AppError::new("TIMELINE_INDEX_MISMATCH", "The current timeline snapshot does not match the project index."));
     }
     Ok(Some(timeline))
