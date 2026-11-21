@@ -653,14 +653,20 @@ fn remove_managed_export(exports_root: &Path, stored_path: &str) -> Result<(), A
         Err(_) => return Err(AppError::new("RECORDING_DELETE_FAILED", "The recording's export folder could not be inspected.")),
     };
     let candidate = PathBuf::from(stored_path);
-    let canonical = match candidate.canonicalize() {
-        Ok(path) => path,
+    let metadata = match fs::symlink_metadata(&candidate) {
+        Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err(AppError::new("RECORDING_DELETE_FAILED", "A generated export could not be inspected.")),
     };
-    if !canonical.starts_with(&root) || !canonical.is_file() {
-        // Never remove a path that does not resolve to a file inside this project's exports folder.
-        return Ok(());
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(AppError::new("DELETE_PATH_INVALID", "A generated export is not a regular managed file."));
+    }
+    let canonical = candidate.canonicalize().map_err(|_| AppError::new(
+        "RECORDING_DELETE_FAILED",
+        "A generated export could not be inspected.",
+    ))?;
+    if !canonical.starts_with(&root) || canonical == root {
+        return Err(AppError::new("DELETE_PATH_INVALID", "A generated export resolved outside this project's exports folder."));
     }
     fs::remove_file(canonical).map_err(|_| AppError::new(
         "RECORDING_DELETE_FAILED",
@@ -731,10 +737,6 @@ fn delete_recording(recording_id: String, state: State<'_, AppState>) -> Result<
             .map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "The recording's export history could not be read."))?
     };
 
-    fs::remove_file(&recording_path).map_err(|_| AppError::new(
-        "RECORDING_DELETE_FAILED",
-        "The original recording could not be deleted. Check file permissions and retry.",
-    ))?;
     for analysis_id in &analysis_ids {
         if analysis::analysis_run_id_valid(analysis_id) {
             remove_managed_directory(&project_dir.join("analysis"), analysis_id,
@@ -756,6 +758,11 @@ fn delete_recording(recording_id: String, state: State<'_, AppState>) -> Result<
         }
     }
 
+    fs::remove_file(&recording_path).map_err(|_| AppError::new(
+        "RECORDING_DELETE_FAILED",
+        "The original recording could not be deleted. Check file permissions and retry.",
+    ))?;
+
     let mut connection = db_connection(&project_dir)?;
     let transaction = connection.transaction()
         .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "The project could not acquire the delete lock."))?;
@@ -770,6 +777,11 @@ fn delete_recording(recording_id: String, state: State<'_, AppState>) -> Result<
     transaction.execute("UPDATE project SET updated_at=?1", params![now_ms().to_string()])
         .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "The project timestamp could not be updated."))?;
     transaction.commit().map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "The recording deletion could not be committed."))?;
+    if let Ok(mut active_analyses) = state.analysis_cancellations.lock() {
+        for analysis_id in &analysis_ids {
+            active_analyses.remove(analysis_id);
+        }
+    }
 
     Ok(())
 }
