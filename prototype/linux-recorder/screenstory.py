@@ -301,12 +301,17 @@ class ScreenstoryRecorder:
             return
         self.stop_button.configure(state="disabled")
         self.status.set("Finishing MP4…")
-        try:
-            if process.stdin:
-                process.stdin.write("q\n")
-                process.stdin.flush()
-        except (BrokenPipeError, OSError):
-            pass
+        if self.capture_process is not None:
+            # Closing the producer makes FFmpeg finalize the rawvideo stream.
+            if self.capture_process.poll() is None:
+                self.capture_process.terminate()
+        else:
+            try:
+                if process.stdin:
+                    process.stdin.write("q\\n")
+                    process.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
         threading.Thread(target=self.wait_for_encoder, daemon=True).start()
 
     def wait_for_encoder(self) -> None:
