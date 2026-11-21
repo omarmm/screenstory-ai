@@ -4,12 +4,18 @@ import App from "./App";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args), convertFileSrc: (path: string) => "asset://localhost/" + path }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => undefined) }));
 
 const appInfo = { name: "Screenstory", version: "0.2.0", runtime: "Tauri" };
-const report = { dependencies: [{
-  id: "ffmpeg", feature: "X11 desktop recording and video processing", status: "available",
-  version: "ffmpeg version 6.1.1", impact: "Desktop recording is available.", canInstall: false, remediation: null,
-}] };
+const report = { dependencies: [
+  { id: "ffmpeg", feature: "FFmpeg and FFprobe · recording and video analysis", status: "available", version: "ffmpeg version 6.1.1", impact: "Recording and video analysis are available.", packages: [], canInstall: false, remediation: null },
+  { id: "ffmpeg-export", feature: "MP4 export · H.264 and AAC encoders", status: "available", version: "libx264 and AAC", impact: "MP4 video and audio encoders are available.", packages: [], canInstall: false, remediation: null },
+  { id: "zoom-effects", feature: "Zoom effects · FFmpeg zoompan filter", status: "available", version: "zoompan", impact: "Zoompan is available.", packages: [], canInstall: false, remediation: null },
+  { id: "caption-rendering", feature: "Caption rendering · FFmpeg ASS/libass filter", status: "available", version: "ass/libass", impact: "Caption rendering is available.", packages: [], canInstall: false, remediation: null },
+  { id: "caption-fonts", feature: "Caption fonts · Noto Sans and Noto Sans Arabic", status: "available", version: "Noto fonts", impact: "Caption fonts are available.", packages: [], canInstall: false, remediation: null },
+  { id: "arabic-shaping", feature: "Arabic caption shaping · HarfBuzz/libass", status: "available", version: "complex", impact: "Arabic shaping is available.", packages: [], canInstall: false, remediation: null },
+  { id: "wayland-capture", feature: "Wayland capture · XDG Desktop Portal and PipeWire", status: "available", version: "X11", impact: "X11 session active.", packages: [], canInstall: false, remediation: null },
+] };
 const project = { id: "p12345-123", name: "Demo project", createdAt: "1730000000000", updatedAt: "1730000000000", recordingsCount: 1 };
 const recording = { id: "recording-1", fileName: "recording-1.mp4", createdAt: "1730000000000", durationSeconds: 12, captureSourceName: "Entire desktop", hasTimeline: true };
 const captureSource = { id: "capture-test-display", name: "Entire desktop · 1920 × 1080", sourceType: "display", backend: "x11", width: 1920, height: 1080, isAvailable: true, isMinimized: false, appHint: null };
@@ -69,11 +75,9 @@ describe("Screenstory desktop application", () => {
   it("offers a user-approved system install when a runtime dependency is missing", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const missingReport = {
-      dependencies: [{
-        id: "ffmpeg", feature: "FFmpeg · recording and video export",
-        status: "missing", version: null, impact: "Recording is unavailable.",
-        canInstall: true, remediation: "Screenstory can install FFmpeg."
-      }]
+      dependencies: report.dependencies.map((dependency) => dependency.id === "ffmpeg"
+        ? { ...dependency, status: "missing", version: null, packages: ["ffmpeg"], impact: "Recording is unavailable.", canInstall: true, remediation: "Screenstory can install FFmpeg." }
+        : dependency)
     };
     invoke.mockImplementation((command: string) => {
       if (command === "check_dependencies") return Promise.resolve(missingReport);
