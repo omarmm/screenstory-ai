@@ -102,18 +102,22 @@ Verification:
 
 Specification: `specs/rendering/SPEC-022-video-preview-and-mp4-export.md` (Approved).
 
-Approved rendering decisions:
-- Immutable render plan derived from the saved timeline revision and managed recording ID.
-- One deterministic filter graph shared by preview and export.
-- Accepted AI/manual zooms only; pending/rejected AI suggestions are excluded.
-- FFmpeg drawtext UTF-8 text files with required Arabic text-shaping and font capability checks. Fail closed if shaping is unavailable.
-- Preserve source audio when present.
-- Fixed FFmpeg argument vector, temporary output, ffprobe validation, fsync and atomic finalization.
-- Export history tied to source recording and timeline revision.
+Implemented on `prototype/tauri-foundation`:
+- A saved-revision-bound render request resolved from the managed recording ID and the current validated timeline snapshot; no frontend file path is trusted.
+- FFmpeg composition with frame-based zoompan, accepted AI/manual zooms only, UTF-8 ASS captions, Arabic bidi isolation and libass complex-shaping mode.
+- Runtime font and FFmpeg capability checks; missing Arabic shaping/font support blocks captioned exports with an actionable error.
+- Source audio mapping to AAC; MP4/H.264 output, ffprobe validation for video codec/dimensions/audio/duration, fsync and atomic finalization.
+- Progress read from FFmpeg's machine-readable progress stream, cancellation, partial-file cleanup and persisted export history.
+- Saved export preview embedded in the application through the narrowly-scoped Tauri asset protocol.
+- Recovery of interrupted exports after application restart and retryable missing-output state.
+- Free-space preflight, source dimension bounds, and FFmpeg process-group cleanup on application exit.
 
-Implementation:
-- M6-T301 — render-plan and filter-generation foundation plus Linux capability proof: in progress.
-- Preview/export process execution, progress, cancellation, persistent history, UI integration and full renderer verification remain open.
+Automated verification added:
+- Frontend test for the saved-revision export command/result flow.
+- Rust tests for zoom expressions, accepted/rejected zoom selection, ASS timestamp/color/text escaping, Arabic caption generation, progress parsing and actual FFmpeg zoom + Arabic ASS composition when capabilities are available.
+- CI capability proof installs FFmpeg, Fontconfig and Noto Core fonts, then verifies the ASS shaping option and Arabic font resolution.
+- CI checks runs 44946417288 and 44946350274 are still in progress; do not treat earlier failed runs as release evidence.
+- Real export playback and Arabic visual correctness on the target Linux Mint device remain unverified. The M6 artifact must be built from the latest passing commit, not the earlier 0.1.0 scaffold.
 
 ## Remaining milestones
 
