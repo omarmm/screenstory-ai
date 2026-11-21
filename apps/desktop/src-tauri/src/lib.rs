@@ -36,6 +36,7 @@ struct AppState {
     recording: Mutex<Option<RecordingSession>>,
     analysis_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     render_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    render_processes: Arc<Mutex<HashMap<String, u32>>>,
 }
 struct RecordingSession {
     child: Child,
@@ -162,6 +163,18 @@ fn project_summary(connection: &Connection) -> Result<ProjectSummary, AppError> 
         updated_at,
         recordings_count: count.max(0) as u64,
     })
+}
+fn ensure_no_active_render(state: &AppState) -> Result<(), AppError> {
+    let active = state.render_cancellations.lock().map_err(|_| {
+        AppError::new("STATE_LOCK_ERROR", "Render state is temporarily unavailable.")
+    })?;
+    if !active.is_empty() {
+        return Err(AppError::new(
+            "RENDER_IN_PROGRESS",
+            "Wait for the current export to finish or cancel it before switching projects.",
+        ));
+    }
+    Ok(())
 }
 fn validate_project_name(name: &str) -> Result<String, AppError> {
     let trimmed = name.trim();
@@ -361,6 +374,7 @@ fn create_project(name: String, state: State<'_, AppState>) -> Result<ProjectSum
         ));
     }
     drop(recording);
+    ensure_no_active_render(&state)?;
     let name = validate_project_name(&name)?;
     let root = projects_root()?;
     fs::create_dir_all(&root).map_err(|_| {
@@ -452,7 +466,9 @@ fn open_project(
         ));
     }
     drop(recording);
+    ensure_no_active_render(&state)?;
     let directory = resolve_project_dir(&project_id)?;
+    render::recover_interrupted_renders(&directory)?;
     let summary = project_summary(&db_connection(&directory)?)?;
     *state.active_project.lock().map_err(|_| {
         AppError::new(
@@ -753,6 +769,7 @@ pub fn run() {
             timeline::save_timeline,
             render::start_render,
             render::get_render_status,
+            render::list_render_history,
             render::cancel_render
         ])
         .build(tauri::generate_context!())
@@ -761,6 +778,7 @@ pub fn run() {
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {
             let state = handle.state::<AppState>();
+            render::prepare_for_app_exit(&state);
             if let Ok(mut recording) = state.recording.lock() {
                 if let Some(mut session) = recording.take() {
                     let _ = session.stdin.write_all(b"q\n");

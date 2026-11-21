@@ -98,6 +98,7 @@ export default function App() {
   const ffmpeg = dependencies?.dependencies.find((item) => item.id === "ffmpeg");
   const elapsedSeconds = useMemo(() => capture.startedAtMs === null ? 0 : Math.floor((clock - capture.startedAtMs) / 1000), [capture.startedAtMs, clock]);
   const timelineDirty = !!timeline && savedTimelineSignature !== JSON.stringify(timeline);
+  const renderInProgress = !!renderStatus && !["completed", "failed", "cancelled", "interrupted"].includes(renderStatus.status);
 
   async function refreshProjects() {
     const [allProjects, current] = await Promise.all([
@@ -274,7 +275,8 @@ export default function App() {
       } else {
         setTimeline(opened);
         setSavedTimelineSignature(JSON.stringify(opened));
-        setRenderStatus(null);
+        const history = await invoke<RenderStatus[]>("list_render_history", { recordingId: opened.recordingId }).catch(() => []);
+        setRenderStatus(history[0] ?? null);
         setNotice("Opened timeline · revision " + opened.revision + ".");
       }
     } catch (reason) { setError(friendlyError(reason)); }
@@ -463,7 +465,7 @@ export default function App() {
       </header>
       <div className="workspace">
         <aside className="sidebar">
-          <div className="sidebar-heading"><span className="eyebrow">YOUR WORKSPACE</span><button className="icon-button" onClick={() => setShowCreate((value) => !value)} aria-label="Add project" disabled={busy || capture.isRecording}>＋</button></div>
+          <div className="sidebar-heading"><span className="eyebrow">YOUR WORKSPACE</span><button className="icon-button" onClick={() => setShowCreate((value) => !value)} aria-label="Add project" disabled={busy || capture.isRecording || renderInProgress}>＋</button></div>
           <button className={"nav-item " + (!activeProject ? "selected" : "")} onClick={() => { if (!capture.isRecording) { setActiveProject(null); setRecordings([]); } }}>
             <span className="nav-icon">⌂</span> Overview
           </button>
@@ -471,7 +473,7 @@ export default function App() {
           {projects.length === 0 && <p className="sidebar-empty">Your projects will appear here.</p>}
           {projects.map((project) => (
             <button className={"project-nav " + (activeProject?.id === project.id ? "selected" : "")} key={project.id}
-              onClick={() => void openProject(project)} disabled={busy || capture.isRecording} title={project.name}>
+              onClick={() => void openProject(project)} disabled={busy || capture.isRecording || renderInProgress} title={project.name}>
               <span className="project-dot" /><span className="project-nav-name">{project.name}</span><span className="project-count">{project.recordingsCount}</span>
             </button>
           ))}

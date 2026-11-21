@@ -1,5 +1,5 @@
 use super::{analysis, db_connection, timeline, AppError, AppState};
-use rusqlite::params;
+use rusqlite::{params, Row};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
@@ -131,6 +131,29 @@ fn ensure_render_table(project_dir: &Path) -> Result<(), AppError> {
         );"
     ).map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "The project's export history could not be initialized."))?;
     Ok(())
+}
+
+
+fn render_status_from_row(row: &Row<'_>) -> rusqlite::Result<RenderStatus> {
+    let status: String = row.get(4)?;
+    let path: String = row.get(7)?;
+    Ok(RenderStatus {
+        run_id: row.get(0)?,
+        recording_id: row.get(1)?,
+        timeline_id: row.get(2)?,
+        timeline_revision: row.get::<_, i64>(3)?.max(0) as u64,
+        status: status.clone(),
+        progress: row.get::<_, i64>(5)?.clamp(0, 100) as u8,
+        output_file_name: row.get(6)?,
+        output_path: if status == "completed" && Path::new(&path).is_file() { Some(path) } else { None },
+        output_size_bytes: row.get::<_, i64>(8)?.max(0) as u64,
+        duration_seconds: row.get(9)?,
+        error_code: row.get(10)?,
+        renderer_version: row.get(11)?,
+        has_audio: row.get::<_, i64>(12)? != 0,
+        annotation_count: row.get::<_, i64>(13)?.max(0) as usize,
+        active_zoom_count: row.get::<_, i64>(14)?.max(0) as usize,
+    })
 }
 
 fn parse_frame_rate(value: &str) -> Option<f64> {
@@ -475,7 +498,13 @@ fn validate_output(path: &Path, source: &VideoInfo) -> Result<(u64, f64), AppErr
     Ok((size, duration))
 }
 
-fn render_worker(project: PathBuf, request: RenderRequest, cancellation: Arc<AtomicBool>, registry: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>) {
+fn render_worker(
+    project: PathBuf,
+    request: RenderRequest,
+    cancellation: Arc<AtomicBool>,
+    registry: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>,
+    processes: Arc<std::sync::Mutex<HashMap<String, u32>>>,
+) {
     let run_id = request.run_id.clone();
     let result = (|| -> Result<(), AppError> {
         let ass_path = if request.timeline.annotations.is_empty() {
@@ -493,14 +522,30 @@ fn render_worker(project: PathBuf, request: RenderRequest, cancellation: Arc<Ato
         update_render_run(&project, &run_id, "rendering", 1, 0, None, None);
         let filters = render_filter(&request, ass_path.as_deref());
         let partial = request.output_dir.join(format!("{run_id}.partial.mp4"));
-        let mut child = Command::new("ffmpeg")
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(&request.recording_path)
+        let mut command = Command::new("ffmpeg");
+        command.args(["-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(&request.recording_path)
             .args(["-map", "0:v:0", "-map", "0:a?", "-vf", &filters,
                 "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
                 "-progress", "pipe:1", "-stats_period", "0.5"])
-            .arg(&partial).stdout(Stdio::piped()).stderr(Stdio::piped())
-            .spawn().map_err(|_| AppError::new("FFMPEG_START_FAILED", "FFmpeg could not start the MP4 export."))?;
+            .arg(&partial).stdout(Stdio::piped()).stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = command.spawn()
+            .map_err(|_| AppError::new("FFMPEG_START_FAILED", "FFmpeg could not start the MP4 export."))?;
+        if let Ok(mut active_processes) = processes.lock() {
+            active_processes.insert(run_id.clone(), child.id());
+        }
+        if cancellation.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&partial);
+            if let Ok(mut active_processes) = processes.lock() { active_processes.remove(&run_id); }
+            return Err(AppError::new("RENDER_CANCELLED", "The MP4 export was cancelled."));
+        }
         let stdout = child.stdout.take().ok_or_else(|| AppError::new("FFMPEG_PROGRESS_UNAVAILABLE", "The FFmpeg progress stream could not be opened."))?;
         let stderr = child.stderr.take().map(|mut stream| thread::spawn(move || {
             let mut buffer = Vec::new();
@@ -557,6 +602,7 @@ fn render_worker(project: PathBuf, request: RenderRequest, cancellation: Arc<Ato
         update_render_run(&project, &run_id, if error.code == "RENDER_CANCELLED" { "cancelled" } else { "failed" }, 0, 0, None, Some(error.code));
     }
     if let Ok(mut active) = registry.lock() { active.remove(&run_id); }
+    if let Ok(mut active_processes) = processes.lock() { active_processes.remove(&run_id); }
 }
 
 #[tauri::command]
@@ -595,8 +641,9 @@ pub fn start_render(recording_id: String, expected_revision: u64, state: State<'
         .insert(run_id.clone(), Arc::clone(&token));
     let worker_project = project.clone();
     let worker_registry = Arc::clone(&registry);
+    let worker_processes = Arc::clone(&state.render_processes);
     let worker_request = request;
-    thread::spawn(move || render_worker(worker_project, worker_request, token, worker_registry));
+    thread::spawn(move || render_worker(worker_project, worker_request, token, worker_registry, worker_processes));
     Ok(RenderStarted { run_id, timeline_id, timeline_revision, output_file_name })
 }
 
@@ -612,22 +659,71 @@ pub fn get_render_status(run_id: String, state: State<'_, AppState>) -> Result<R
     db_connection(&project)?.query_row(
         "SELECT id, recording_id, timeline_id, timeline_revision, status, progress, output_file_name, output_path, output_size_bytes, duration_seconds, error_code, renderer_version, has_audio, annotation_count, active_zoom_count FROM render_runs WHERE id=?1",
         params![run_id],
-        |row| {
-            let status: String = row.get(4)?;
-            let path: String = row.get(7)?;
-            Ok(RenderStatus {
-                run_id: row.get(0)?, recording_id: row.get(1)?, timeline_id: row.get(2)?,
-                timeline_revision: row.get::<_, i64>(3)?.max(0) as u64, status: status.clone(),
-                progress: row.get::<_, i64>(5)?.clamp(0,100) as u8, output_file_name: row.get(6)?,
-                output_path: if status == "completed" { Some(path) } else { None },
-                output_size_bytes: row.get::<_, i64>(8)?.max(0) as u64,
-                duration_seconds: row.get(9)?, error_code: row.get(10)?, renderer_version: row.get(11)?,
-                has_audio: row.get::<_, i64>(12)? != 0,
-                annotation_count: row.get::<_, i64>(13)?.max(0) as usize,
-                active_zoom_count: row.get::<_, i64>(14)?.max(0) as usize,
-            })
-        }
+        render_status_from_row
     ).map_err(|_| AppError::new("RENDER_RUN_NOT_FOUND", "The requested export run could not be found in the active project."))
+}
+
+#[tauri::command]
+pub fn list_render_history(recording_id: String, state: State<'_, AppState>) -> Result<Vec<RenderStatus>, AppError> {
+    if recording_id.len() < 3 || recording_id.len() > 120 ||
+        !recording_id.starts_with('r') && !recording_id.starts_with("recording-") ||
+        !recording_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(AppError::new("INVALID_RECORDING_ID", "The recording identifier is invalid."));
+    }
+    let project = state.active_project.lock().map_err(|_| AppError::new("STATE_LOCK_ERROR", "Project state is unavailable."))?
+        .as_ref().cloned().ok_or_else(|| AppError::new("NO_ACTIVE_PROJECT", "Open a project to inspect export history."))?;
+    ensure_render_table(&project)?;
+    let connection = db_connection(&project)?;
+    let mut statement = connection.prepare(
+        "SELECT id, recording_id, timeline_id, timeline_revision, status, progress, output_file_name, output_path, output_size_bytes, duration_seconds, error_code, renderer_version, has_audio, annotation_count, active_zoom_count FROM render_runs WHERE recording_id=?1 ORDER BY created_at_ms DESC LIMIT 20"
+    ).map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "The export history could not be loaded."))?;
+    let rows = statement.query_map(params![recording_id], render_status_from_row)
+        .map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "The export history could not be loaded."))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "The export history could not be read."))
+}
+
+pub(super) fn recover_interrupted_renders(project_dir: &Path) -> Result<(), AppError> {
+    ensure_render_table(project_dir)?;
+    let connection = db_connection(project_dir)?;
+    let mut statement = connection.prepare(
+        "SELECT id FROM render_runs WHERE status IN ('preparing','rendering','validating','cancelling')"
+    ).map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "Interrupted export history could not be inspected."))?;
+    let ids = statement.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "Interrupted export history could not be inspected."))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "Interrupted export history could not be read."))?;
+    drop(statement);
+    for id in ids {
+        let _ = fs::remove_file(project_dir.join("exports").join(format!("{id}.partial.mp4")));
+        connection.execute(
+            "UPDATE render_runs SET status='interrupted', progress=0, error_code='APP_EXITED' WHERE id=?1",
+            params![id]
+        ).map_err(|_| AppError::new("RENDER_DATABASE_ERROR", "Interrupted export state could not be recovered."))?;
+    }
+    Ok(())
+}
+
+pub(super) fn prepare_for_app_exit(state: &AppState) {
+    let active = state.render_cancellations.lock().map(|runs| {
+        runs.iter().map(|(id, token)| {
+            token.store(true, Ordering::SeqCst);
+            id.clone()
+        }).collect::<Vec<_>>()
+    }).unwrap_or_default();
+    let pids = state.render_processes.lock().map(|processes| processes.values().copied().collect::<Vec<_>>()).unwrap_or_default();
+    for pid in pids {
+        // FFmpeg is launched in its own process group. Signal the group so a
+        // child encoder cannot be orphaned when the desktop shell exits.
+        let _ = Command::new("kill").args(["-TERM", "--", &format!("-{pid}")]).status();
+    }
+    let project = state.active_project.lock().ok().and_then(|active| active.clone());
+    if let Some(project) = project {
+        for id in active {
+            update_render_run(&project, &id, "interrupted", 0, 0, None, Some("APP_EXITED"));
+            let _ = fs::remove_file(project.join("exports").join(format!("{id}.partial.mp4")));
+        }
+    }
 }
 
 #[tauri::command]
