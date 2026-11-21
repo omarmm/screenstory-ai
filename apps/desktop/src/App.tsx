@@ -80,6 +80,7 @@ export default function App() {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [dependencies, setDependencies] = useState<DependencyReport | null>(null);
+  const [installingDependency, setInstallingDependency] = useState<string | null>(null);
   const [capture, setCapture] = useState<CaptureStatus>({ isRecording: false, fileName: null, startedAtMs: null });
   const [captureSources, setCaptureSources] = useState<CaptureSource[]>([]);
   const [selectedCaptureSourceId, setSelectedCaptureSourceId] = useState("");
@@ -110,6 +111,33 @@ export default function App() {
   const elapsedSeconds = useMemo(() => capture.startedAtMs === null ? 0 : Math.floor((clock - capture.startedAtMs) / 1000), [capture.startedAtMs, clock]);
   const timelineDirty = !!timeline && savedTimelineSignature !== JSON.stringify(timeline);
   const renderInProgress = !!renderStatus && !["completed", "failed", "cancelled", "interrupted"].includes(renderStatus.status);
+
+  async function installDependency(dependency: Dependency) {
+    if (!dependency.canInstall || installingDependency) return;
+    const approved = window.confirm(
+      "Screenstory needs " + dependency.feature + ". Allow your system package manager to install it? Your system will show its normal administrator authentication prompt."
+    );
+    if (!approved) return;
+
+    setInstallingDependency(dependency.id);
+    setError(null);
+    setNotice("Installing " + dependency.feature + " with your system package manager…");
+    try {
+      const report = await invoke<DependencyReport>("install_dependency", { dependencyId: dependency.id });
+      setDependencies(report);
+      const installed = report.dependencies.find((item) => item.id === dependency.id);
+      if (installed?.status === "available") {
+        setNotice(dependency.feature + " is installed and ready.");
+      } else {
+        setNotice("Installation finished. Recheck the dependency status before using this feature.");
+      }
+    } catch (reason) {
+      setNotice(null);
+      setError(friendlyError(reason));
+    } finally {
+      setInstallingDependency(null);
+    }
+  }
 
   async function refreshProjects() {
     const [allProjects, current] = await Promise.all([
@@ -816,10 +844,21 @@ export default function App() {
                     : <button className="record-button" onClick={() => void startRecording()} disabled={busy || loading || ffmpeg?.status !== "available" || !selectedCaptureSource?.isAvailable}><span className="record-circle" />{busy ? "Starting…" : "Start recording"}</button>}
                   <span className="record-hint">{capture.isRecording ? "Keep Screenstory open until the MP4 is finalized." : "Recording begins after you press Start. Nothing is captured before then."}</span>
                 </div>
-                {ffmpeg?.status !== "available" && <div className="dependency-warning"><strong>FFmpeg is required to record.</strong>
-                  <p>{ffmpeg?.remediation ?? "Checking FFmpeg availability…"}</p>
-                  <button className="secondary-button" onClick={() => void invoke<DependencyReport>("check_dependencies").then(setDependencies)}>Recheck dependency</button>
-                </div>}
+                {(dependencies?.dependencies ?? []).filter((dependency) => dependency.status !== "available").map((dependency) => (
+                  <div className="dependency-warning" key={dependency.id}>
+                    <strong>{dependency.feature} is missing</strong>
+                    <p>{dependency.remediation ?? dependency.impact}</p>
+                    {dependency.canInstall
+                      ? <button className="secondary-button" onClick={() => void installDependency(dependency)}
+                          disabled={installingDependency !== null}>
+                          {installingDependency === dependency.id ? "Installing…" : "Install automatically"}
+                        </button>
+                      : <span className="dependency-manual-hint">Install this package with your distribution's Software Manager, then recheck.</span>}
+                  </div>
+                ))}
+                <button className="text-button dependency-recheck" onClick={() => {
+                  void invoke<DependencyReport>("check_dependencies").then(setDependencies).catch((reason) => setError(friendlyError(reason)));
+                }} disabled={installingDependency !== null}>Recheck dependencies</button>
               </section>
               <section className="recordings-card"><div className="section-heading"><div><span className="eyebrow">PROJECT LIBRARY</span><h2>Recordings</h2></div><span className="count-pill">{recordings.length}</span></div>
                 {recordings.length === 0 ? <div className="recordings-empty"><span className="empty-video-icon">▹</span><strong>No recordings yet</strong><p>Your saved desktop recordings will appear here.</p></div>
