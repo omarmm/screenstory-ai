@@ -2,8 +2,8 @@
 
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
-**Current milestone:** M2 — local projects and X11 desktop recording  
-**Status:** Implemented in code; CI verification passed; target-device smoke test remains pending.
+**Current milestone:** M3 — post-recording AI analysis  
+**Status:** M2 implementation passed CI; target-device capture verification pending. M3 specification approved; implementation not yet started.
 
 ## Product scope
 
@@ -53,7 +53,7 @@ Implemented on `prototype/tauri-foundation`:
 - Debian package build and package metadata verification: passed.
 - Artifact: `screenstory-linux-deb`.
 
-## Verification still required
+## Verification still required for M2
 
 - Install and run 0.2.1 on the target Linux Mint machine.
 - Capture a real short MP4 and verify playback, dimensions, frame rate, and graceful stop.
@@ -61,34 +61,41 @@ Implemented on `prototype/tauri-foundation`:
 - Complete SPEC-017 consent-based FFmpeg installation with visible progress before release.
 - Validate generated Debian dependencies against the supported Linux Mint baselines.
 
-CI success does not prove actual desktop capture quality on the target machine. Do not claim device validation until a real MP4 is captured and played there.
+CI success does not prove capture quality on the target device. Do not claim device validation until a real MP4 is captured and played there.
+
+## M3 — post-recording AI analysis
+
+Approved specification: `specs/analysis/SPEC-019-post-recording-ai-analysis.md`.
+
+Implementation scope:
+- User-initiated, persisted, cancellable analysis runs with visible progress.
+- Local ffprobe metadata inspection and bounded, timestamped periodic frame extraction.
+- Versioned frame manifest; original MP4 stays untouched and is never uploaded.
+- Gemini Interactions API adapter using structured output and a provider-independent contract.
+- Linux Secret Service/keyring storage for the user-provided API key; no plaintext fallback.
+- Per-run cloud-transfer consent with disclosure of frames/text sent.
+- Stateless Gemini request (`store=false`), bounded retries, normalized errors.
+- Domain validation of timestamps, frame evidence, confidence, and normalized zoom geometry.
+- Save AI output as an unapproved draft; re-analysis cannot overwrite earlier drafts or manual edits.
+
+M3 intentionally does not include the timeline editor or MP4 tutorial renderer.
 
 ## Not implemented yet
 
 - Selected-window recording and Wayland portal/PipeWire capture.
-- Post-recording analysis orchestration and cancellation.
-- Deterministic frame extraction, scene/visual-change sampling, and extraction manifest.
-- Gemini provider integration, explicit cloud-transfer consent, and provider abstraction.
-- Persisted, versioned editable tutorial timeline.
-- Step editing, zoom editing, Arabic/English annotations.
-- Preview and final tutorial MP4 rendering/export.
+- M3 analysis implementation and Gemini integration.
+- Persisted editable timeline editor, manual step editing, zoom editing, and Arabic/English annotations.
+- Preview and final MP4 tutorial rendering/export.
 - Audio capture, pause/resume, webcam capture, and background recording.
+- Complete assisted FFmpeg installation with visible progress.
 
-## Next milestone — M3: analysis foundation
+## Future milestones
 
-Before implementation, revise and approve the currently draft specifications:
-- `specs/analysis/SPEC-004-video-analysis.md`
-- `specs/analysis/SPEC-005-frame-extraction.md`
-- `specs/analysis/SPEC-006-ai-analysis-contract.md`
-- `specs/ai/SPEC-013-gemini-provider.md`
-- `specs/ai/SPEC-014-provider-abstraction.md`
-
-Recommended sequence:
-1. Finalize the analysis input/output contract and timeline handoff.
-2. Implement deterministic metadata inspection and bounded frame extraction with source timestamps and a manifest.
-3. Add cancellable analysis-run lifecycle and visible progress.
-4. Implement provider-independent AI contracts and Gemini behind explicit cloud-transfer consent.
-5. Validate all AI output before creating or replacing a timeline; preserve manual edits and the immutable original recording.
+1. M4 — versioned timeline persistence and step editing.
+2. M5 — hybrid zoom editing and Arabic/English annotations.
+3. M6 — video preview and deterministic MP4 tutorial export.
+4. M7 — selected-window and Wayland capture adapters, after separate capability proofs.
+5. M8 — release hardening, assisted runtime dependency installation, compatibility validation, and licensing/package review.
 
 ## Verification policy
 
