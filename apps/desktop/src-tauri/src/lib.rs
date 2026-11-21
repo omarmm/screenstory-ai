@@ -997,6 +997,7 @@ fn finalize_recording_session(mut session: RecordingSession) -> Result<Recording
         capture_backend: session.capture_backend,
         capture_source_type: session.capture_source_type,
         capture_source_name: session.capture_source_name,
+        has_timeline: false,
     })
 }
 
