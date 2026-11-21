@@ -236,9 +236,13 @@ class ScreenstoryRecorder:
         self.started_at = None
 
     def finish_recording(self) -> None:
+        # Both the UI poller and stop-waiter may observe process exit.
+        # Make finalization idempotent so the user gets one result dialog.
         process = self.process
+        if process is None:
+            return
         output = self.output_file
-        return_code = process.returncode if process else None
+        return_code = process.returncode
         self.cleanup_process()
         self.record_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
