@@ -2,7 +2,7 @@
 
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
-**Status:** Production desktop stack accepted; SPEC-017 revised for automated dependency management and awaiting review.
+**Status:** M1 specification approved; Tauri foundation prototype authorized.
 
 ## Approved product scope
 
@@ -42,21 +42,21 @@ The Python/Tkinter recorder remains a prototype and behavioral reference until t
 
 **M1 — Desktop Foundation.**
 
-SPEC-017 is a draft covering the app shell, Rust command boundary, least-privilege capabilities, automated runtime dependency checks, user-consented dependency installation, CI builds, and Linux packaging. It is awaiting review; no implementation task is Ready.
+SPEC-017 is Approved. It defines the Tauri shell, Rust command boundary, least-privilege capabilities, dependency readiness, explicit user-consented feature dependency installation, CI builds, and Debian packaging.
 
-Dependency policy:
-- Build-time toolchains and development headers belong in CI, not on end-user machines.
-- Mandatory libraries needed before the Tauri window can launch must be declared in package metadata and resolved by the OS package manager during installation.
-- Optional/feature runtime dependencies are checked by the app. Missing dependencies trigger a clear user-consent prompt; no package operation or privilege escalation occurs without explicit approval.
-- Linux Mint's primary distribution path is a .deb package. The generated package metadata must declare the Tauri runtime libraries it needs.
+Approved implementation choices:
+- pnpm with a committed lockfile for the frontend.
+- Vitest + React Testing Library for frontend tests.
+- Typed application error codes and safe messages; thiserror for internal Rust error composition.
+- Project creation remains in SPEC-001 and is not faked in the M1 empty state.
+- Initial x86_64 support baseline: Linux Mint 21.3+ (Ubuntu 22.04 base) and Linux Mint 22.x (Ubuntu 24.04 base), subject to CI/package verification.
+- Primary package: .deb. Flatpak is deferred until the .deb path is proven.
 
-Next gate:
-1. Review and approve SPEC-017.
-2. Finalize frontend package manager and test tooling.
-3. Define the supported Linux Mint/Ubuntu baseline and package-manager adapter policy.
-4. Scaffold and build in CI; no manual environment-preparation task is assigned to the product owner.
+## Prototype status
 
-No production capture port is authorized merely by creating the shell. Capture remains governed by SPEC-002 and must be integrated behind the unified adapter contract.
+A separate Tauri foundation prototype branch is authorized. It will contain only the initial desktop shell and a minimal typed Rust bridge. It will not claim capture, project creation, AI, or export functionality. CI/build evidence must be reported separately from local-device testing.
+
+The existing Python/Tkinter recorder remains the only demonstrated capture prototype. Its X11 window capture has a fixed-size limitation; the XComposite experiment produced black frames. No second capture prototype has been validated.
 
 ## Capture evidence and current direction
 
@@ -67,19 +67,30 @@ No production capture port is authorized merely by creating the shell. Capture r
 - Wayland: XDG Desktop Portal ScreenCast + PipeWire remains the intended direction; validation is pending.
 - The prototype is not production-ready and does not prove cross-distribution compatibility.
 
-## Active implementation task
+## Active tasks
 
-None. No implementation task is currently Ready or In Progress.
+- M1-T1 — CI/build baseline: Ready.
+- M1-T2 — Tauri application scaffold: Blocked on M1-T1 build baseline.
+- M1-T3 — Typed Rust bridge and least-privilege capabilities: Blocked on M1-T2.
+- M1-T4 — Runtime dependency readiness and user-consented installation: Blocked on M1-T3.
+- M1-T5 — Initial empty-state shell: Blocked on M1-T2.
+- M1-T6 — Quality and .deb packaging gates: Blocked on M1-T1 through M1-T5.
+
+## Dependency policy
+
+- Build-time toolchains and development headers belong in CI, not on end-user machines.
+- Mandatory libraries needed before the Tauri window can launch must be declared in package metadata and resolved by the OS package manager during installation.
+- Optional/feature runtime dependencies are checked by the app. Missing dependencies trigger a clear user-consent prompt; no package operation or privilege escalation occurs without explicit approval.
+- Linux Mint's primary distribution path is a .deb package. The generated package metadata must declare the Tauri runtime libraries it needs.
 
 ## Blockers / open questions
 
 - The production X11 window-capture backend is unresolved: current x11grab window capture has a resize limitation; the XComposite experiment produced black output.
 - Minimized/off-workspace X11 window behavior must be defined from evidence.
 - Wayland portal/PipeWire behavior remains unvalidated on a target compositor.
-- FFmpeg availability and required filter/font capabilities must be validated.
+- FFmpeg runtime package/version policy and required filter/font capabilities must be validated.
 - Gemini model selection, API limits, and current pricing must be verified at implementation time.
-- Minimum supported Linux Mint/Ubuntu base release and secondary packaging format remain to be finalized.
 
 ## Decision policy
 
-Do not start implementation merely because the repository exists. Start only after the relevant detailed specification is approved and a task is marked Ready.
+No implementation may exceed the approved scope of its parent specification. Each task requires a handoff, acceptance criteria, tests, and recorded verification evidence before closure.
