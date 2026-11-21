@@ -303,7 +303,9 @@ fn ffmpeg_listing_contains(kind: &str, name: &str) -> bool {
         Ok(output) if output.status.success() => output,
         _ => return false,
     };
-    String::from_utf8_lossy(&output.stdout)
+    let mut listing = String::from_utf8_lossy(&output.stdout).to_string();
+    listing.push_str(&String::from_utf8_lossy(&output.stderr));
+    listing
         .lines()
         .any(|line| line.split_whitespace().any(|word| word == name))
 }
