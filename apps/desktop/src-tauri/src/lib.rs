@@ -1550,6 +1550,20 @@ mod tests {
         assert_eq!(parse_xrandr_size("unknown"), None);
     }
     #[test]
+    fn dependency_installer_uses_only_the_fixed_package_allowlist() {
+        assert_eq!(dependency_packages("ffmpeg"), Some(&["ffmpeg"][..]));
+        assert_eq!(
+            dependency_packages("caption-fonts"),
+            Some(&["fontconfig", "fonts-noto-core"][..])
+        );
+        assert_eq!(dependency_packages("ffmpeg-export"), Some(&["ffmpeg"][..]));
+        assert_eq!(dependency_packages("zoom-effects"), Some(&["ffmpeg"][..]));
+        assert_eq!(dependency_packages("caption-rendering"), Some(&["ffmpeg"][..]));
+        assert_eq!(dependency_packages("apt-get remove screenstory"), None);
+        assert_eq!(dependency_packages("https://example.invalid/package"), None);
+    }
+
+    #[test]
     fn dependency_report_is_feature_specific() {
         assert_eq!(
             dependency_report().dependencies.first().unwrap().id,
