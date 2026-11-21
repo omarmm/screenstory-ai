@@ -94,6 +94,7 @@ struct DependencyStatus {
     status: &'static str,
     version: Option<String>,
     impact: &'static str,
+    packages: Vec<&'static str>,
     can_install: bool,
     remediation: Option<&'static str>,
 }
@@ -297,147 +298,288 @@ fn has_font_family(pattern: &str, expected: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn apt_installer_available() -> bool {
+    Path::new("/usr/bin/pkexec").is_file() && Path::new("/usr/bin/apt-get").is_file()
+}
+
+fn command_succeeds(program: &str, args: &[&str]) -> bool {
+    Command::new(program).args(args).output().map(|output| output.status.success()).unwrap_or(false)
+}
+
+fn ffmpeg_listing_contains(kind: &str, name: &str) -> bool {
+    let output = match Command::new("ffmpeg").args(["-hide_banner", kind]).output() {
+        Ok(output) if output.status.success() => output,
+        _ => return false,
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.split_whitespace().any(|word| word == name))
+}
+
+fn has_font_family(pattern: &str, expected: &str) -> bool {
+    Command::new("fc-match")
+        .args(["-f", "%{family}", pattern])
+        .output()
+        .map(|output| {
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout)
+                    .to_lowercase()
+                    .contains(&expected.to_lowercase())
+        })
+        .unwrap_or(false)
+}
+
 fn ffmpeg_status() -> DependencyStatus {
-    match Command::new("ffmpeg").arg("-version").output() {
-        Ok(output) if output.status.success() => DependencyStatus {
+    let ffmpeg_ok = command_succeeds("ffmpeg", &["-version"]);
+    let ffprobe_ok = command_succeeds("ffprobe", &["-version"]);
+    if ffmpeg_ok && ffprobe_ok {
+        let version = Command::new("ffmpeg").arg("-version").output().ok()
+            .and_then(|output| String::from_utf8_lossy(&output.stdout).lines().next().map(str::to_owned));
+        DependencyStatus {
             id: "ffmpeg",
-            feature: "Desktop recording and video processing",
+            feature: "FFmpeg and FFprobe · recording and video analysis",
             status: "available",
-            version: Some(
-                String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("FFmpeg available")
-                    .to_string(),
-            ),
-            impact: "Desktop recording and MP4 export are available.",
+            version,
+            impact: "Recording, frame extraction, and video metadata inspection are available.",
+            packages: Vec::new(),
             can_install: false,
             remediation: None,
-        },
-        _ => DependencyStatus {
+        }
+    } else {
+        DependencyStatus {
             id: "ffmpeg",
-            feature: "FFmpeg · recording and video export",
+            feature: "FFmpeg and FFprobe · recording and video analysis",
             status: "missing",
             version: None,
-            impact: "Recording and video export are unavailable until FFmpeg is installed.",
+            impact: "Recording, frame extraction, and video metadata inspection need FFmpeg and FFprobe.",
+            packages: vec!["ffmpeg"],
             can_install: apt_installer_available(),
             remediation: Some(if apt_installer_available() {
-                "Screenstory can install FFmpeg using your system's package manager. You will be asked to approve it."
+                "Screenstory can install the ffmpeg package, which provides both ffmpeg and ffprobe. Your administrator will be asked to approve it."
             } else {
-                "Install FFmpeg with your Linux distribution's package manager, then recheck."
+                "Install the ffmpeg package using your distribution's package manager, then recheck."
             }),
-        },
+        }
+    }
+}
+
+fn ffmpeg_export_status() -> DependencyStatus {
+    if !command_succeeds("ffmpeg", &["-version"]) {
+        return DependencyStatus {
+            id: "ffmpeg-export",
+            feature: "MP4 export · H.264 and AAC encoders",
+            status: "missing",
+            version: None,
+            impact: "MP4 export needs FFmpeg.",
+            packages: vec!["ffmpeg"],
+            can_install: apt_installer_available(),
+            remediation: Some("Install FFmpeg before exporting an MP4."),
+        };
+    }
+    let missing = [
+        ("libx264", ffmpeg_listing_contains("-encoders", "libx264")),
+        ("AAC", ffmpeg_listing_contains("-encoders", "aac")),
+    ].into_iter().filter_map(|(name, available)| if available { None } else { Some(name) }).collect::<Vec<_>>();
+    if missing.is_empty() {
+        DependencyStatus {
+            id: "ffmpeg-export",
+            feature: "MP4 export · H.264 and AAC encoders",
+            status: "available",
+            version: Some("libx264 and AAC".to_string()),
+            impact: "The required MP4 video and audio encoders are available.",
+            packages: Vec::new(),
+            can_install: false,
+            remediation: None,
+        }
+    } else {
+        DependencyStatus {
+            id: "ffmpeg-export",
+            feature: "MP4 export · H.264 and AAC encoders",
+            status: "unsupported",
+            version: None,
+            impact: "The installed FFmpeg build is missing: ".to_string().leak(),
+            packages: Vec::new(),
+            can_install: false,
+            remediation: Some("This FFmpeg build does not include the required encoders. Install a distribution FFmpeg build that provides libx264 and AAC support."),
+        }
+    }
+}
+
+fn zoom_effects_status() -> DependencyStatus {
+    if !command_succeeds("ffmpeg", &["-version"]) {
+        return DependencyStatus {
+            id: "zoom-effects",
+            feature: "Zoom effects · FFmpeg zoompan filter",
+            status: "missing",
+            version: None,
+            impact: "Timeline zoom effects require FFmpeg.",
+            packages: vec!["ffmpeg"],
+            can_install: apt_installer_available(),
+            remediation: Some("Install FFmpeg before exporting zoom effects."),
+        };
+    }
+    if ffmpeg_listing_contains("-filters", "zoompan") {
+        DependencyStatus {
+            id: "zoom-effects",
+            feature: "Zoom effects · FFmpeg zoompan filter",
+            status: "available",
+            version: Some("zoompan".to_string()),
+            impact: "The FFmpeg zoompan filter is available.",
+            packages: Vec::new(),
+            can_install: false,
+            remediation: None,
+        }
+    } else {
+        DependencyStatus {
+            id: "zoom-effects",
+            feature: "Zoom effects · FFmpeg zoompan filter",
+            status: "unsupported",
+            version: None,
+            impact: "The installed FFmpeg build does not provide the zoompan filter.",
+            packages: Vec::new(),
+            can_install: false,
+            remediation: Some("Install an FFmpeg build that includes the zoompan video filter."),
+        }
     }
 }
 
 fn caption_fonts_status() -> DependencyStatus {
-    let fontconfig_available = Command::new("fc-match").arg("--version").output()
-        .map(|output| output.status.success()).unwrap_or(false);
+    let fontconfig_available = command_succeeds("fc-match", &["--version"]);
     let regular_font = fontconfig_available && has_font_family("Noto Sans", "noto sans");
     let arabic_font = fontconfig_available && has_font_family("Noto Sans Arabic:lang=ar", "noto sans arabic");
     if regular_font && arabic_font {
         DependencyStatus {
             id: "caption-fonts",
-            feature: "Noto Sans · English and Arabic captions",
+            feature: "Caption fonts · Noto Sans and Noto Sans Arabic",
             status: "available",
             version: Some("Noto Sans and Noto Sans Arabic".to_string()),
             impact: "English and Arabic caption fonts are available.",
+            packages: Vec::new(),
             can_install: false,
             remediation: None,
         }
     } else {
         DependencyStatus {
             id: "caption-fonts",
-            feature: "Noto Sans · English and Arabic captions",
+            feature: "Caption fonts · Noto Sans and Noto Sans Arabic",
             status: "missing",
             version: None,
             impact: "Caption rendering needs Fontconfig, Noto Sans, and Noto Sans Arabic.",
+            packages: vec!["fontconfig", "fonts-noto-core"],
             can_install: apt_installer_available(),
             remediation: Some(if apt_installer_available() {
-                "Screenstory can install Fontconfig and Noto fonts using your system's package manager. You will be asked to approve it."
+                "Screenstory can install fontconfig and fonts-noto-core using APT. Your administrator will be asked to approve it."
             } else {
-                "Install fontconfig and fonts-noto-core with your Linux distribution's package manager, then recheck."
+                "Install fontconfig and fonts-noto-core with your distribution's package manager, then recheck."
             }),
+        }
+    }
+}
+
+fn caption_rendering_status() -> DependencyStatus {
+    if !command_succeeds("ffmpeg", &["-version"]) {
+        return DependencyStatus {
+            id: "caption-rendering",
+            feature: "Caption rendering · FFmpeg ASS/libass filter",
+            status: "missing",
+            version: None,
+            impact: "Caption burn-in requires FFmpeg.",
+            packages: vec!["ffmpeg"],
+            can_install: apt_installer_available(),
+            remediation: Some("Install FFmpeg before exporting captions."),
+        };
+    }
+    if ffmpeg_listing_contains("-filters", "ass") {
+        DependencyStatus {
+            id: "caption-rendering",
+            feature: "Caption rendering · FFmpeg ASS/libass filter",
+            status: "available",
+            version: Some("ass/libass".to_string()),
+            impact: "The FFmpeg ASS subtitle filter is available.",
+            packages: Vec::new(),
+            can_install: false,
+            remediation: None,
+        }
+    } else {
+        DependencyStatus {
+            id: "caption-rendering",
+            feature: "Caption rendering · FFmpeg ASS/libass filter",
+            status: "unsupported",
+            version: None,
+            impact: "The installed FFmpeg build does not provide the ASS/libass caption filter.",
+            packages: Vec::new(),
+            can_install: false,
+            remediation: Some("Install an FFmpeg build compiled with the libass subtitle filter."),
+        }
+    }
+}
+
+fn arabic_shaping_status() -> DependencyStatus {
+    let mode = render::ass_shaping_mode();
+    if mode == "complex" {
+        DependencyStatus {
+            id: "arabic-shaping",
+            feature: "Arabic caption shaping · HarfBuzz/libass",
+            status: "available",
+            version: Some("complex shaping".to_string()),
+            impact: "Arabic captions can be shaped correctly.",
+            packages: Vec::new(),
+            can_install: false,
+            remediation: None,
+        }
+    } else {
+        DependencyStatus {
+            id: "arabic-shaping",
+            feature: "Arabic caption shaping · HarfBuzz/libass",
+            status: "unsupported",
+            version: None,
+            impact: "The installed FFmpeg/libass build cannot confirm complex Arabic shaping.",
+            packages: Vec::new(),
+            can_install: false,
+            remediation: Some("Install an FFmpeg/libass build with HarfBuzz complex shaping support before exporting Arabic captions."),
+        }
+    }
+}
+
+fn wayland_capture_status() -> DependencyStatus {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_ascii_lowercase();
+    if session == "wayland" {
+        DependencyStatus {
+            id: "wayland-capture",
+            feature: "Wayland capture · XDG Desktop Portal and PipeWire",
+            status: "unsupported",
+            version: None,
+            impact: "This Screenstory build does not yet include the verified Wayland capture adapter.",
+            packages: Vec::new(),
+            can_install: false,
+            remediation: Some("Wayland capture is not enabled in this build. Use an X11 session for recording."),
+        }
+    } else {
+        DependencyStatus {
+            id: "wayland-capture",
+            feature: "Wayland capture · XDG Desktop Portal and PipeWire",
+            status: "available",
+            version: Some("X11 session".to_string()),
+            impact: "Wayland runtime components are not required in this X11 session.",
+            packages: Vec::new(),
+            can_install: false,
+            remediation: None,
         }
     }
 }
 
 fn dependency_report() -> DependencyReport {
     DependencyReport {
-        dependencies: vec![ffmpeg_status(), caption_fonts_status()],
+        dependencies: vec![
+            ffmpeg_status(),
+            ffmpeg_export_status(),
+            zoom_effects_status(),
+            caption_rendering_status(),
+            caption_fonts_status(),
+            arabic_shaping_status(),
+            wayland_capture_status(),
+        ],
     }
-}
-
-fn install_dependency_blocking(dependency_id: &str) -> Result<DependencyReport, AppError> {
-    let packages: &[&str] = match dependency_id {
-        "ffmpeg" => &["ffmpeg"],
-        "caption-fonts" => &["fontconfig", "fonts-noto-core"],
-        _ => return Err(AppError::new(
-            "DEPENDENCY_NOT_SUPPORTED",
-            "Screenstory cannot install that dependency automatically.",
-        )),
-    };
-    let current = dependency_report();
-    if current.dependencies.iter().find(|item| item.id == dependency_id)
-        .is_some_and(|item| item.status == "available")
-    {
-        return Ok(current);
-    }
-    if !apt_installer_available() {
-        return Err(AppError::new(
-            "SYSTEM_INSTALLER_UNAVAILABLE",
-            "Automatic installation requires APT and the PolicyKit authorization service. Use your Software Manager, then recheck dependencies.",
-        ));
-    }
-
-    let output = Command::new("/usr/bin/pkexec")
-        .arg("/usr/bin/apt-get")
-        .arg("install")
-        .arg("-y")
-        .args(packages)
-        .output()
-        .map_err(|_| AppError::new(
-            "DEPENDENCY_INSTALL_FAILED",
-            "Could not start the system package installer. Check that a graphical authentication agent is running.",
-        ))?;
-
-    if !output.status.success() {
-        if output.status.code() == Some(126) || output.status.code() == Some(127) {
-            return Err(AppError::new(
-                "DEPENDENCY_INSTALL_CANCELLED",
-                "System installation was cancelled or not authorized. Approve the system authentication prompt to continue.",
-            ));
-        }
-        let detail = String::from_utf8_lossy(&output.stderr);
-        let detail = detail.lines().rev().find(|line| !line.trim().is_empty())
-            .unwrap_or("The system package manager reported an error.");
-        return Err(AppError::new(
-            "DEPENDENCY_INSTALL_FAILED",
-            format!("The system package manager could not install the required dependency: {detail}"),
-        ));
-    }
-
-    let updated = dependency_report();
-    if updated.dependencies.iter().find(|item| item.id == dependency_id)
-        .is_some_and(|item| item.status == "available")
-    {
-        Ok(updated)
-    } else {
-        Err(AppError::new(
-            "DEPENDENCY_INSTALL_UNVERIFIED",
-            "The package manager finished, but Screenstory could not verify the dependency. Recheck the system packages and try again.",
-        ))
-    }
-}
-
-#[tauri::command]
-async fn install_dependency(dependency_id: String) -> Result<DependencyReport, AppError> {
-    tauri::async_runtime::spawn_blocking(move || install_dependency_blocking(&dependency_id))
-        .await
-        .map_err(|_| AppError::new(
-            "DEPENDENCY_INSTALL_FAILED",
-            "The system dependency installation task could not be completed.",
-        ))?
 }
 
 #[cfg(test)]
