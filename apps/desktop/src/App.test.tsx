@@ -113,7 +113,7 @@ describe("Screenstory desktop application", () => {
     });
     render(<App />);
     const select = await screen.findByLabelText("Capture source") as HTMLSelectElement;
-    expect(select.querySelector('option[value="capture-minimized-window"]')?.disabled).toBe(true);
+    expect((select.querySelector('option[value="capture-minimized-window"]') as HTMLOptionElement | null)?.disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Refresh sources" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_capture_sources"));
   });
