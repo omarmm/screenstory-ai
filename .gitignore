@@ -1,0 +1,26 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Build outputs
+dist/
+target/
+node_modules/
+src-tauri/target/
+
+# Local project media and test artifacts
+*.mkv
+*.mp4
+*.webm
+*.wav
+*.sqlite
+*.db
