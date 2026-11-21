@@ -123,8 +123,7 @@ fn app_hint(
     let value = property(connection, window, wm_class_atom)?;
     let class = String::from_utf8_lossy(&value)
         .split('\0')
-        .filter(|part| !part.trim().is_empty())
-        .next_back()?
+        .rfind(|part| !part.trim().is_empty())?
         .trim()
         .to_string();
     if class.is_empty() || class.len() > 128 {
