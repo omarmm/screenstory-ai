@@ -342,7 +342,10 @@ fn get_active_project(state: State<'_, AppState>) -> Result<Option<ProjectSummar
 #[tauri::command]
 fn create_project(name: String, state: State<'_, AppState>) -> Result<ProjectSummary, AppError> {
     let recording = state.recording.lock().map_err(|_| {
-        AppError::new("STATE_LOCK_ERROR", "Recording state is temporarily unavailable.")
+        AppError::new(
+            "STATE_LOCK_ERROR",
+            "Recording state is temporarily unavailable.",
+        )
     })?;
     if recording.is_some() {
         return Err(AppError::new(
