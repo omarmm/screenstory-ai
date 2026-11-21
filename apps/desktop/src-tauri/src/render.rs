@@ -2,6 +2,7 @@ use super::{analysis, db_connection, timeline, AppError, AppState};
 use rusqlite::{params, Row};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
