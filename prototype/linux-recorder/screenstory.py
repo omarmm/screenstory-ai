@@ -166,6 +166,27 @@ class ScreenstoryRecorder:
             title = parts[7] if len(parts) > 7 else "(untitled)"
             if int(width) < 80 or int(height) < 60:
                 continue
+
+            # Do not offer the desktop/root background or shell surfaces as
+            # application capture targets.
+            if title.strip().lower() in {"desktop", "cinnamon", "panel"}:
+                continue
+            if shutil.which("xprop"):
+                props = subprocess.run(
+                    ["xprop", "-id", wid, "_NET_WM_WINDOW_TYPE"],
+                    capture_output=True, text=True, check=False,
+                ).stdout
+                excluded_types = (
+                    "_NET_WM_WINDOW_TYPE_DESKTOP",
+                    "_NET_WM_WINDOW_TYPE_DOCK",
+                    "_NET_WM_WINDOW_TYPE_NOTIFICATION",
+                    "_NET_WM_WINDOW_TYPE_TOOLTIP",
+                    "_NET_WM_WINDOW_TYPE_MENU",
+                    "_NET_WM_WINDOW_TYPE_POPUP_MENU",
+                )
+                if any(kind in props for kind in excluded_types):
+                    continue
+
             label = f"{title}  [{wid}]"
             self.window_choices[label] = (wid, int(width), int(height))
             labels.append(label)
