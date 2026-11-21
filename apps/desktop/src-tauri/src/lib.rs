@@ -368,9 +368,8 @@ fn dependency_report() -> DependencyReport {
     }
 }
 
-#[tauri::command]
-fn install_dependency(dependency_id: String) -> Result<DependencyReport, AppError> {
-    let packages: &[&str] = match dependency_id.as_str() {
+fn install_dependency_blocking(dependency_id: &str) -> Result<DependencyReport, AppError> {
+    let packages: &[&str] = match dependency_id {
         "ffmpeg" => &["ffmpeg"],
         "caption-fonts" => &["fontconfig", "fonts-noto-core"],
         _ => return Err(AppError::new(
@@ -387,7 +386,7 @@ fn install_dependency(dependency_id: String) -> Result<DependencyReport, AppErro
     if !apt_installer_available() {
         return Err(AppError::new(
             "SYSTEM_INSTALLER_UNAVAILABLE",
-            "Automatic installation requires the APT package manager and the PolicyKit authorization service. Use your Software Manager, then recheck dependencies.",
+            "Automatic installation requires APT and the PolicyKit authorization service. Use your Software Manager, then recheck dependencies.",
         ));
     }
 
@@ -429,6 +428,16 @@ fn install_dependency(dependency_id: String) -> Result<DependencyReport, AppErro
             "The package manager finished, but Screenstory could not verify the dependency. Recheck the system packages and try again.",
         ))
     }
+}
+
+#[tauri::command]
+async fn install_dependency(dependency_id: String) -> Result<DependencyReport, AppError> {
+    tauri::async_runtime::spawn_blocking(move || install_dependency_blocking(&dependency_id))
+        .await
+        .map_err(|_| AppError::new(
+            "DEPENDENCY_INSTALL_FAILED",
+            "The system dependency installation task could not be completed.",
+        ))?
 }
 
 #[cfg(test)]
