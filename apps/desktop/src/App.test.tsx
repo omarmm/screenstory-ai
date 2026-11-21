@@ -103,7 +103,7 @@ describe("Screenstory desktop application", () => {
       timeline: { ...timeline, steps: [{ ...timeline.steps[0], title: "Open account settings" }] },
       expectedRevision: 1,
     }));
-    expect(await screen.findByText(/revision 2/)).toBeTruthy();
+    expect(await screen.findByText(/Timeline saved · revision 2/)).toBeTruthy();
   });
 
   it("surfaces a native startup/storage error without crashing", async () => {
