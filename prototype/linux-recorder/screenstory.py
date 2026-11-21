@@ -166,7 +166,7 @@ class ScreenstoryRecorder:
 
             # Do not offer the desktop/root background or shell surfaces as
             # application capture targets.
-            if title.strip().lower() in {"desktop", "cinnamon", "panel"}:
+            if title.strip().lower() in {"desktop", "cinnamon", "panel"} or title.strip().lower().startswith("screenstory"):
                 continue
             if shutil.which("xprop"):
                 props = subprocess.run(
