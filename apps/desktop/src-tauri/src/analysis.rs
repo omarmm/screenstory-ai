@@ -533,26 +533,32 @@ pub fn cancel_analysis(run_id: String, state: State<'_, AppState>) -> Result<(),
 
 fn response_text(value: &Value) -> Option<String> {
     if let Some(text) = value.get("output_text").and_then(Value::as_str) {
-        return Some(text.to_string());
+        if !text.trim().is_empty() {
+            return Some(text.to_string());
+        }
     }
-    fn walk(value: &Value, found: &mut Vec<String>) {
-        match value {
-            Value::Array(items) => for item in items { walk(item, found); },
-            Value::Object(object) => {
-                if object.get("type").and_then(Value::as_str) == Some("text") {
-                    if let Some(text) = object.get("text").and_then(Value::as_str) {
+
+    // Gemini Interactions REST responses expose model text in
+    // steps[].content[], not an "output" property.
+    let steps = value.get("steps").and_then(Value::as_array)?;
+    let mut found = Vec::new();
+    for step in steps {
+        if step.get("type").and_then(Value::as_str) != Some("model_output") {
+            continue;
+        }
+        let Some(content) = step.get("content").and_then(Value::as_array) else {
+            continue;
+        };
+        for item in content {
+            if item.get("type").and_then(Value::as_str) == Some("text") {
+                if let Some(text) = item.get("text").and_then(Value::as_str) {
+                    if !text.trim().is_empty() {
                         found.push(text.to_string());
                     }
                 }
-                for (key, child) in object {
-                    if key != "text" { walk(child, found); }
-                }
             }
-            _ => {}
         }
     }
-    let mut found = Vec::new();
-    walk(value.get("output").unwrap_or(value), &mut found);
     if found.is_empty() { None } else { Some(found.join("\n")) }
 }
 
@@ -883,6 +889,25 @@ mod tests {
         assert_eq!(scaled_dimension(1920, 1080), (1024, 576));
         assert_eq!(scaled_dimension(1080, 1920), (576, 1024));
         assert_eq!(scaled_dimension(800, 600), (800, 600));
+    }
+
+    #[test]
+    fn extracts_model_output_from_gemini_interactions_steps() {
+        let payload = json!({
+            "id": "v1_example",
+            "status": "completed",
+            "steps": [
+                {"type":"thought","signature":"ignored"},
+                {"type":"model_output","content":[
+                    {"type":"text","text":"{\\"schema_version\\":1,"},
+                    {"type":"text","text":"\\"summary\\":\\"Captured workflow\\"}"}
+                ]}
+            ]
+        });
+        assert_eq!(
+            response_text(&payload).as_deref(),
+            Some("{\\"schema_version\\":1,\n\\"summary\\":\\"Captured workflow\\"}")
+        );
     }
 
     #[test]
