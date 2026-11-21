@@ -2,7 +2,7 @@
 
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
-**Status:** Specification baseline prepared; implementation not started.
+**Status:** Specification baseline prepared; capture mechanism reassessment in progress.
 
 ## Approved product scope
 
@@ -35,23 +35,32 @@
 
 **Phase 0 — Specification finalization and technical validation.**
 
+## Capture architecture direction
+
+- X11 full-display capture: FFmpeg `x11grab` passed the initial Linux Mint + Cinnamon + X11 validation.
+- X11 window capture: FFmpeg `x11grab -window_id` is unsuitable for the required resize/minimize lifecycle. XComposite is the selected follow-up mechanism, based on its use in OBS Studio's Linux X11 window-capture implementation.
+- Wayland: XDG Desktop Portal ScreenCast + PipeWire remains the selected architecture direction; validation is pending.
+- No production capture implementation has started. XComposite dependency/license selection and spike evidence are still required.
+
 ## Next actions
 
-1. Review and approve the detailed Linux capture specification.
-2. Validate Wayland and X11 capture behavior on the target Linux environment.
-3. Finalize frame extraction and scene-detection strategy.
-4. Approve the versioned timeline JSON schema.
-5. Define the Gemini request/response contract and privacy controls.
-6. Only then authorize M1 implementation tasks.
+1. Revise and review SPEC-002 with the XComposite-based X11 window-capture direction.
+2. Complete the XComposite proof of capability on Linux Mint + Cinnamon + X11.
+3. Validate Wayland capture through XDG Desktop Portal and PipeWire on a target compositor.
+4. Finalize frame extraction and scene-detection strategy.
+5. Approve the versioned timeline JSON schema.
+6. Define the Gemini request/response contract and privacy controls.
+7. Authorize M1 implementation tasks only after the relevant specifications are approved.
 
 ## Active implementation task
 
-None.
+None. The active work is specification and technical validation.
 
 ## Blockers / open questions
 
-- Target Linux distribution and desktop environment must be recorded.
-- Window-capture behavior must be validated on the target Wayland portal implementation.
+- XComposite runtime capabilities and license-compatible integration approach must be selected and validated.
+- Minimized/off-workspace X11 window behavior must be defined from evidence.
+- Target Wayland portal implementation and its window-source capabilities remain unvalidated.
 - FFmpeg availability and required filter/font capabilities must be validated.
 - Gemini model selection, API limits, and current pricing must be verified at implementation time.
 - Packaging strategy (AppImage, deb, or both) remains open.
