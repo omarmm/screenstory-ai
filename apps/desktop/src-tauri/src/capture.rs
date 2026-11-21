@@ -29,12 +29,13 @@ pub struct X11Window {
 fn connect() -> Result<(RustConnection, usize, Window), String> {
     let (connection, screen_index) = x11rb::connect(None)
         .map_err(|_| "The X11 display connection is unavailable.".to_string())?;
-    let screen = connection
+    let root = connection
         .setup()
         .roots
         .get(screen_index)
-        .ok_or_else(|| "The active X11 screen could not be resolved.".to_string())?;
-    Ok((connection, screen_index, screen.root))
+        .ok_or_else(|| "The active X11 screen could not be resolved.".to_string())?
+        .root;
+    Ok((connection, screen_index, root))
 }
 
 pub fn display_dimensions() -> Result<X11Display, String> {
@@ -82,7 +83,8 @@ fn property_u32(
         .ok()?
         .reply()
         .ok()?;
-    reply.value32()?.next()
+    let value = reply.value32()?.next();
+    value
 }
 
 fn text_property(bytes: Option<Vec<u8>>) -> Option<String> {

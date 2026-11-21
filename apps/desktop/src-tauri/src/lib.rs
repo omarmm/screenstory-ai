@@ -176,10 +176,11 @@ fn db_connection(project_dir: &Path) -> Result<Connection, AppError> {
     let columns = {
         let mut statement = connection.prepare("PRAGMA table_info(recordings)")
             .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?;
-        statement.query_map([], |row| row.get::<_, String>(1))
-            .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?
+        let rows = statement.query_map([], |row| row.get::<_, String>(1))
+            .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?;
+        let collected = rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?;
+        collected
     };
     for (column, declaration) in [
         ("capture_backend", "capture_backend TEXT NOT NULL DEFAULT 'x11'"),
