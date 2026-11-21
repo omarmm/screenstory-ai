@@ -220,7 +220,7 @@ class ScreenstoryRecorder:
         missing = []
         for package in packages:
             check = subprocess.run(
-                ["dpkg-query", "-W", "-f=${db:Status-Status}", package],
+                ["dpkg-query", "-W", "-f", "${db:Status-Status}", package],
                 capture_output=True, text=True, check=False,
             )
             if check.returncode != 0 or check.stdout.strip() != "installed":
@@ -262,7 +262,7 @@ class ScreenstoryRecorder:
                 detail = (result.stderr or result.stdout or "").strip()
                 self.root.after(0, lambda: self.package_install_finished(result.returncode, detail))
             except Exception as exc:
-                self.root.after(0, lambda: self.package_install_finished(1, str(exc)))
+                error_text = str(exc)\n                self.root.after(0, lambda message=error_text: self.package_install_finished(1, message))
 
         threading.Thread(target=worker, daemon=True).start()
 
