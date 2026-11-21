@@ -352,3 +352,33 @@ option:checked, option:hover {
   .recording-row { flex-wrap: wrap; }
   .recording-details { flex-basis: calc(100% - 48px); }
 }
+
+
+.dependency-warning {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(219,169,80,.22);
+  border-radius: 9px;
+  background: rgba(164,113,42,.09);
+}
+.dependency-warning strong {
+  color: #f0cc91;
+  font-size: 11px;
+}
+.dependency-warning p,
+.dependency-manual-hint {
+  margin: 0;
+  color: #aebbd1;
+  font-size: 10px;
+  line-height: 1.55;
+}
+.dependency-recheck {
+  margin-top: 8px;
+  color: #aebeff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
