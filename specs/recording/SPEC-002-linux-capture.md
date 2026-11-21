@@ -15,6 +15,12 @@ The product is Linux distribution-agnostic. Linux Mint with Cinnamon on X11 is t
 - X11 adapter: evaluate FFmpeg `x11grab` for full-display capture and window capture. Window identification, geometry changes, and resizing behavior must be validated in the technical spike.
 - Wayland adapter: use XDG Desktop Portal ScreenCast for source selection/permission flow and PipeWire for receiving the stream.
 - Detect required runtime capabilities and dependencies at startup; report missing or unsupported capabilities clearly instead of assuming a specific distro package layout.
+- Provide a dependency-readiness check before recording. Identify missing required and optional components and explain which feature requires each component.
+- When a required dependency is missing, offer an assisted installation/remediation flow appropriate to the detected distribution/package manager. The user must explicitly approve installation before any system changes or privilege escalation.
+- Never silently run package-manager commands, request administrator privileges without user action, or install unrelated packages.
+- If automatic installation is unsupported or fails, show exact actionable manual instructions and allow the user to retry the readiness check.
+- Prefer application-bundled or app-managed dependencies only where packaging, security updates, architecture support, and FFmpeg licensing obligations have been reviewed. Do not assume bundling is always preferable.
+- Distinguish mandatory runtime dependencies from optional diagnostic/development tools. For example, `xwininfo` may be used in the spike but must not become an application runtime dependency unless separately justified.
 - Treat Linux Mint Cinnamon X11 as the first test environment, not the only supported environment.
 - Do not require a specific Linux distribution release as an architectural constraint.
 
@@ -30,6 +36,9 @@ The product is Linux distribution-agnostic. Linux Mint with Cinnamon on X11 is t
 - Global keyboard/mouse hooks are not required.
 - Support distribution-agnostic runtime capability detection.
 - Keep platform-specific dependencies and behavior inside the corresponding adapter.
+- Detect missing dependencies before a capture attempt and communicate their impact.
+- Provide user-consented dependency installation or clear manual remediation.
+- Re-check capabilities after installation and report success or failure.
 
 ## Open questions
 
@@ -37,6 +46,9 @@ The product is Linux distribution-agnostic. Linux Mint with Cinnamon on X11 is t
 - Which window-selection capabilities are exposed by portal implementations on target Wayland desktops?
 - Which PipeWire stream formats and frame rates are available across target environments?
 - What packaging strategy best handles dependencies across distributions?
+- Which dependencies should be bundled, app-managed, or provided by the host package manager?
+- Which package managers and installation paths will the MVP officially support?
+- How will Screenstory request and scope elevated privileges safely through supported package-manager mechanisms?
 - How will X11 window identity and geometry be tracked if the selected window moves or resizes?
 - Which additional distributions/desktops should be included in the compatibility test matrix after the initial Linux Mint environment?
 
@@ -51,6 +63,8 @@ The product is Linux distribution-agnostic. Linux Mint with Cinnamon on X11 is t
 - Permission denial and stream interruption are handled.
 - Original output is playable and metadata is recorded.
 - Missing runtime capabilities produce actionable diagnostics.
+- Missing required dependencies are detected before capture and the user is offered a consent-based remediation path.
+- No dependency installation or privilege escalation occurs without explicit user approval.
 
 ## Technical Spike
 
@@ -60,5 +74,6 @@ No production implementation is authorized by this specification alone. The tech
 3. Required runtime dependencies and capability detection.
 4. Output video playability and metadata.
 5. A separate Wayland proof-of-capability using XDG Desktop Portal and PipeWire.
+6. Dependency detection behavior when FFmpeg is absent, including a user-facing remediation recommendation. The spike must not perform unattended system installation.
 
 The spike results must be recorded before this specification can move to Approved.
