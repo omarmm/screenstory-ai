@@ -33,6 +33,12 @@ jobs:
         run: pnpm test
       - name: Build frontend
         run: pnpm build
+      - name: Verify Tauri-relative production assets
+        run: |
+          if grep -Eq '(src|href)="/assets/' dist/index.html; then
+            echo "Production assets must use relative paths for the Tauri app URL" >&2
+            exit 1
+          fi
 
   linux-deb:
     runs-on: ubuntu-22.04

@@ -2,95 +2,57 @@
 
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
-**Status:** M1 specification approved; Tauri foundation prototype authorized.
+**Status:** M2 — first usable local recording slice implemented; CI verification pending.
 
-## Approved product scope
+## Product scope
 
 - Linux-first desktop application.
-- Full desktop and specific-window recording.
+- Full desktop and specific-window recording; specific-window backend remains unresolved.
 - Optional workflow description.
-- Post-recording AI analysis.
-- Gemini as the initial AI provider.
+- Post-recording AI analysis using Gemini initially.
 - Provider-independent AI contracts.
-- Hybrid zoom: AI suggestions plus manual editing.
-- Editable timeline.
-- Text annotations in Arabic and English.
-- MP4 export.
-- Local-first project storage.
-- Original recording remains immutable.
-
-## Deferred scope
-
-- Ollama implementation.
-- Reading project specifications or source repositories.
-- Autonomous computer-use agents.
-- Live AI monitoring.
-- Automatic voice-over.
-- Speech transcription.
-- Windows/macOS support.
-- Cloud project storage.
-- PDF export.
-- Mandatory Python backend/worker (ADR-010).
+- Hybrid zoom, editable timeline, Arabic/English annotations, and MP4 export.
+- Local-first projects; original recording remains immutable.
 
 ## Approved architecture
 
-ADR-001 selects Tauri v2 + React + TypeScript + Rust for the production desktop application. ADR-010 confirms that a Python backend is not required for the MVP. FFmpeg remains the video processing/encoding tool. SQLite + filesystem remain the persistence direction.
+Tauri v2 + React + TypeScript + Rust. FFmpeg handles video capture/processing. SQLite + filesystem store project metadata and large media. Python is not a mandatory desktop runtime.
 
-The Python/Tkinter recorder remains a prototype and behavioral reference until the Tauri application passes equivalent capture acceptance tests. It is not the production architecture.
+## Completed foundation
 
-## Current milestone
+- M1 Tauri shell and typed Rust bridge.
+- Linux CI build and Debian packaging.
+- Vite production asset paths use relative references for the Tauri local app URL.
+- Initial 0.1.0 foundation .deb built successfully in CI.
 
-**M1 — Desktop Foundation.**
+## M2 — first usable local recording slice
 
-SPEC-017 is Approved. It defines the Tauri shell, Rust command boundary, least-privilege capabilities, dependency readiness, explicit user-consented feature dependency installation, CI builds, and Debian packaging.
+SPEC-018 is approved for this implementation slice.
 
-Approved implementation choices:
-- pnpm with a committed lockfile for the frontend.
-- Vitest + React Testing Library for frontend tests.
-- Typed application error codes and safe messages; thiserror for internal Rust error composition.
-- Project creation remains in SPEC-001 and is not faked in the M1 empty state.
-- Initial x86_64 support baseline: Linux Mint 21.3+ (Ubuntu 22.04 base) and Linux Mint 22.x (Ubuntu 24.04 base), subject to CI/package verification.
-- Primary package: .deb. Flatpak is deferred until the .deb path is proven.
+Implementation in progress on prototype/tauri-foundation:
+- Local project create/list/open commands.
+- Per-project SQLite metadata and recording index.
+- Filesystem project workspace with recordings, analysis, timeline, assets, and exports folders.
+- Full-desktop FFmpeg x11grab recording in X11 only.
+- Recording status/timer, graceful stop, MP4 finalization, and project recording index.
+- UI does not claim selected-window or Wayland capture.
 
-## Prototype status
+Pending verification:
+- CI Rust/frontend tests, lint, and Debian build.
+- Linux Mint target-device smoke test for actual FFmpeg x11grab capture and MP4 playback.
+- Application-exit cleanup while recording.
+- FFmpeg dependency assisted installation with consent and progress (SPEC-017).
+- Generated Debian dependency metadata validation on the supported Linux Mint baselines.
 
-A separate Tauri foundation prototype branch is authorized. It will contain only the initial desktop shell and a minimal typed Rust bridge. It will not claim capture, project creation, AI, or export functionality. CI/build evidence must be reported separately from local-device testing.
+## Not implemented yet
 
-The existing Python/Tkinter recorder remains the only demonstrated capture prototype. Its X11 window capture has a fixed-size limitation; the XComposite experiment produced black frames. No second capture prototype has been validated.
+- Selected-window recording and Wayland portal/PipeWire capture.
+- AI video analysis, Gemini request flow, and frame extraction.
+- Editable timeline, step editing, zoom editing, Arabic/English annotations.
+- Preview and final MP4 tutorial rendering/export.
+- Audio capture and pause/resume.
+- Consent-based optional dependency installation with live progress.
 
-## Capture evidence and current direction
+## Verification policy
 
-- X11 full-display capture: FFmpeg x11grab produced a playable recording in the Linux Mint + Cinnamon + X11 prototype.
-- X11 window capture: FFmpeg x11grab -window_id produced a playable recording in the prototype. The current approach uses fixed initial dimensions and does not support resizing the target window during capture.
-- XComposite experiment: attempted in the same target environment, but output was black. It is not considered validated or selected as a working implementation.
-- The prototype includes refresh/error handling for stale or closed window selections and a larger default UI. These changes are on the prototype branch and still require local confirmation after pull.
-- Wayland: XDG Desktop Portal ScreenCast + PipeWire remains the intended direction; validation is pending.
-- The prototype is not production-ready and does not prove cross-distribution compatibility.
-
-## Active tasks
-
-- M1-T1 — CI/build baseline: Ready.
-- M1-T2 — Tauri application scaffold: Blocked on M1-T1 build baseline.
-- M1-T3 — Typed Rust bridge and least-privilege capabilities: Blocked on M1-T2.
-- M1-T4 — Runtime dependency readiness and user-consented installation: Blocked on M1-T3.
-- M1-T5 — Initial empty-state shell: Blocked on M1-T2.
-- M1-T6 — Quality and .deb packaging gates: Blocked on M1-T1 through M1-T5.
-
-## Dependency policy
-
-- Build-time toolchains and development headers belong in CI, not on end-user machines.
-- Mandatory libraries needed before the Tauri window can launch must be declared in package metadata and resolved by the OS package manager during installation.
-- Optional/feature runtime dependencies are checked by the app. Missing dependencies trigger a clear user-consent prompt; no package operation or privilege escalation occurs without explicit approval.
-- Linux Mint's primary distribution path is a .deb package. The generated package metadata must declare the Tauri runtime libraries it needs.
-
-## Blockers / open questions
-
-- The production X11 window-capture backend is unresolved: current x11grab window capture has a resize limitation; the XComposite experiment produced black output.
-- Minimized/off-workspace X11 window behavior must be defined from evidence.
-- Wayland portal/PipeWire behavior remains unvalidated on a target compositor.
-- FFmpeg runtime package/version policy and required filter/font capabilities must be validated.
-- Gemini model selection, API limits, and current pricing must be verified at implementation time.
-
-## Decision policy
-
-No implementation may exceed the approved scope of its parent specification. Each task requires a handoff, acceptance criteria, tests, and recorded verification evidence before closure.
+CI evidence is not equivalent to a local Linux Mint capture test. Do not claim recording is device-validated until a real MP4 is captured and played on the target environment.

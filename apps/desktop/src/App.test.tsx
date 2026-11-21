@@ -1,51 +1,83 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import App from "./App";
 
 const invoke = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invoke(...args),
-}));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
-const appInfo = { name: "Screenstory", version: "0.1.0", runtime: "Tauri" };
-const dependencyReport = {
-  dependencies: [{
-    id: "ffmpeg", feature: "Recording and video processing", status: "missing",
-    version: null, impact: "FFmpeg is required for video features.",
-    canInstall: true, remediation: "Install FFmpeg from system repositories.",
-  }],
-};
+const appInfo = { name: "Screenstory", version: "0.2.0", runtime: "Tauri" };
+const report = { dependencies: [{
+  id: "ffmpeg", feature: "X11 desktop recording and video processing", status: "available",
+  version: "ffmpeg version 6.1.1", impact: "Desktop recording is available.", canInstall: false, remediation: null,
+}] };
+const project = { id: "p12345-123", name: "Demo project", createdAt: "1730000000000", updatedAt: "1730000000000", recordingsCount: 0 };
 
-describe("Screenstory desktop shell", () => {
+function standard(command: string) {
+  switch (command) {
+    case "get_app_info": return Promise.resolve(appInfo);
+    case "check_dependencies": return Promise.resolve(report);
+    case "get_recording_status": return Promise.resolve({ isRecording: false, fileName: null, startedAtMs: null });
+    case "list_projects": return Promise.resolve([]);
+    case "get_active_project": return Promise.resolve(null);
+    case "list_recordings": return Promise.resolve([]);
+    case "create_project": return Promise.resolve(project);
+    case "open_project": return Promise.resolve(project);
+    case "start_recording": return Promise.resolve({ fileName: "recording-1.mp4", startedAtMs: Date.now() });
+    case "stop_recording": return Promise.resolve({ id: "recording-1", fileName: "recording-1.mp4", createdAt: "1730000000000", durationSeconds: 12 });
+    default: return Promise.reject(new Error("Unexpected command: " + command));
+  }
+}
+
+describe("Screenstory desktop application", () => {
   beforeEach(() => {
     cleanup();
     invoke.mockReset();
+    invoke.mockImplementation((command: string) => standard(command));
+  });
+
+  it("loads the local workspace and offers project creation", async () => {
+    render(<App />);
+    expect(await screen.findByText("Create a clear story.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /New project/ })).toBeTruthy();
+    expect(await screen.findByText("Native core connected")).toBeTruthy();
+  });
+
+  it("creates a project through the native command and opens the new workspace", async () => {
+    let created = false;
     invoke.mockImplementation((command: string) => {
-      if (command === "get_app_info") return Promise.resolve(appInfo);
-      if (command === "check_dependencies") return Promise.resolve(dependencyReport);
-      return Promise.reject(new Error("Unexpected command"));
+      if (command === "create_project") { created = true; return Promise.resolve(project); }
+      if (command === "list_projects") return Promise.resolve(created ? [project] : []);
+      if (command === "get_active_project") return Promise.resolve(created ? project : null);
+      return standard(command);
     });
-  });
-
-  it("shows the honest empty project state and missing feature dependency", async () => {
     render(<App />);
-    expect(screen.getByText("Your workspace is ready")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /New project/ })).toBeDisabled();
-    expect(await screen.findByText("FFmpeg")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Install FFmpeg" })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: /New project/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Project name" }), { target: { value: "Demo project" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("create_project", { name: "Demo project" }));
+    expect(await screen.findByText("Capture your workflow")).toBeTruthy();
   });
 
-  it("shows the native core version after a successful bridge call", async () => {
+  it("starts and stops a recording in an open project", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_projects") return Promise.resolve([project]);
+      if (command === "get_active_project") return Promise.resolve(project);
+      return standard(command);
+    });
     render(<App />);
-    expect(await screen.findByText("v0.1.0 · Tauri")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: /Start recording/ }));
+    expect(await screen.findByRole("button", { name: /Stop & save/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Stop & save/ }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("stop_recording"));
   });
 
-  it("keeps the shell available when dependency detection fails", async () => {
+  it("surfaces a native startup/storage error without crashing", async () => {
     invoke.mockImplementation((command: string) => command === "get_app_info"
       ? Promise.resolve(appInfo)
-      : Promise.reject(new Error("probe failed")));
+      : command === "list_projects"
+        ? Promise.reject(new Error("storage unavailable"))
+        : standard(command));
     render(<App />);
-    expect(await screen.findByText("Your workspace is ready")).toBeTruthy();
-    expect(await screen.findByRole("status")).toBeTruthy();
+    expect(await screen.findByRole("alert")).toBeTruthy();
   });
 });
