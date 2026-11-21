@@ -2,6 +2,7 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 mod analysis;
 mod timeline;
+mod render;
 
 use std::{
     collections::HashMap,
@@ -34,6 +35,7 @@ struct AppState {
     active_project: Mutex<Option<PathBuf>>,
     recording: Mutex<Option<RecordingSession>>,
     analysis_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    render_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 struct RecordingSession {
     child: Child,
@@ -748,7 +750,10 @@ pub fn run() {
             analysis::get_analysis_draft,
             timeline::create_timeline_from_draft,
             timeline::get_timeline_for_recording,
-            timeline::save_timeline
+            timeline::save_timeline,
+            render::start_render,
+            render::get_render_status,
+            render::cancel_render
         ])
         .build(tauri::generate_context!())
         .expect("error while building Screenstory");

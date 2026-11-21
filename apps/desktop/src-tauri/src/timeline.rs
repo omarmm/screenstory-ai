@@ -94,19 +94,19 @@ pub struct TimelineAnnotation {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SourceManifest {
-    run_id: String,
-    recording_id: String,
-    source_file_name: String,
-    source_duration_ms: u64,
-    frames: Vec<SourceFrame>,
+pub(super) struct SourceManifest {
+    pub(super) run_id: String,
+    pub(super) recording_id: String,
+    pub(super) source_file_name: String,
+    pub(super) source_duration_ms: u64,
+    pub(super) frames: Vec<SourceFrame>,
 }
 #[derive(Debug, Deserialize)]
 struct SourceFrame {
     id: String,
 }
 
-fn ensure_timeline_table(project_dir: &Path) -> Result<(), AppError> {
+pub(super) fn ensure_timeline_table(project_dir: &Path) -> Result<(), AppError> {
     let connection = db_connection(project_dir)?;
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS timelines (
@@ -129,7 +129,7 @@ fn ensure_timeline_table(project_dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn valid_timeline_id(value: &str) -> bool {
+pub(super) fn valid_timeline_id(value: &str) -> bool {
     value.starts_with('t')
         && value.len() > 2
         && value
@@ -141,7 +141,7 @@ fn validate_source_run_id(value: &str) -> bool {
     analysis::analysis_run_id_valid(value)
 }
 
-fn source_manifest(project_dir: &Path, run_id: &str) -> Result<(PathBuf, SourceManifest), AppError> {
+pub(super) fn source_manifest(project_dir: &Path, run_id: &str) -> Result<(PathBuf, SourceManifest), AppError> {
     if !validate_source_run_id(run_id) {
         return Err(AppError::new(
             "INVALID_ANALYSIS_RUN_ID",
@@ -204,7 +204,7 @@ fn known_frame_ids(manifest: &SourceManifest) -> HashSet<&str> {
     manifest.frames.iter().map(|frame| frame.id.as_str()).collect()
 }
 
-fn validate_timeline(
+pub(super) fn validate_timeline(
     timeline: &TimelineDocument,
     manifest: &SourceManifest,
 ) -> Result<(), AppError> {

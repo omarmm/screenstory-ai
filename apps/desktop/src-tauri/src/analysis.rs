@@ -215,7 +215,7 @@ fn ensure_analysis_table(project_dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn resolve_recording(project_dir: &Path, recording_id: &str) -> Result<(String, PathBuf), AppError> {
+pub(super) fn resolve_recording(project_dir: &Path, recording_id: &str) -> Result<(String, PathBuf), AppError> {
     if recording_id.is_empty() || recording_id.len() > 128 || recording_id.chars().any(char::is_control) {
         return Err(AppError::new("INVALID_RECORDING_ID", "The selected recording identifier is invalid."));
     }
