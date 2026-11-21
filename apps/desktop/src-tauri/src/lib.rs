@@ -8,7 +8,7 @@ use std::{
     sync::Mutex,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::State;
+use tauri::{Manager, State};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -341,6 +341,16 @@ fn get_active_project(state: State<'_, AppState>) -> Result<Option<ProjectSummar
 }
 #[tauri::command]
 fn create_project(name: String, state: State<'_, AppState>) -> Result<ProjectSummary, AppError> {
+    let recording = state.recording.lock().map_err(|_| {
+        AppError::new("STATE_LOCK_ERROR", "Recording state is temporarily unavailable.")
+    })?;
+    if recording.is_some() {
+        return Err(AppError::new(
+            "RECORDING_IN_PROGRESS",
+            "Stop the current recording before creating another project.",
+        ));
+    }
+    drop(recording);
     let name = validate_project_name(&name)?;
     let root = projects_root()?;
     fs::create_dir_all(&root).map_err(|_| {
@@ -707,7 +717,7 @@ fn stop_recording(state: State<'_, AppState>) -> Result<RecordingSummary, AppErr
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_app_info,
@@ -721,8 +731,21 @@ pub fn run() {
             start_recording,
             stop_recording
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Screenstory");
+        .build(tauri::generate_context!())
+        .expect("error while building Screenstory");
+
+    app.run(|handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            let state = handle.state::<AppState>();
+            if let Ok(mut recording) = state.recording.lock() {
+                if let Some(mut session) = recording.take() {
+                    let _ = session.stdin.write_all(b"q\n");
+                    let _ = session.stdin.flush();
+                    let _ = session.child.wait();
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]
