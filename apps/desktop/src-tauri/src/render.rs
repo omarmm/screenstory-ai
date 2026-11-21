@@ -226,7 +226,9 @@ fn ffmpeg_version() -> Result<String, AppError> {
 fn filter_is_available(name: &str) -> bool {
     let Ok(output) = Command::new("ffmpeg").args(["-hide_banner", "-filters"]).output() else { return false; };
     if !output.status.success() { return false; }
-    String::from_utf8_lossy(&output.stdout).lines().any(|line| line.split_whitespace().any(|word| word == name))
+    let mut listing = String::from_utf8_lossy(&output.stdout).to_string();
+    listing.push_str(&String::from_utf8_lossy(&output.stderr));
+    listing.lines().any(|line| line.split_whitespace().any(|word| word == name))
 }
 
 pub(super) fn ass_shaping_mode() -> String {
