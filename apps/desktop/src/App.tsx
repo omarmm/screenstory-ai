@@ -106,6 +106,7 @@ export default function App() {
   const [renderBusy, setRenderBusy] = useState(false);
 
   const ffmpeg = dependencies?.dependencies.find((item) => item.id === "ffmpeg");
+  const missingDependencies = dependencies?.dependencies.filter((item) => item.status !== "available") ?? [];
   const selectedCaptureSource = captureSources.find((source) => source.id === selectedCaptureSourceId);
   const availableCaptureSources = captureSources.filter((source) => source.isAvailable);
   const elapsedSeconds = useMemo(() => capture.startedAtMs === null ? 0 : Math.floor((clock - capture.startedAtMs) / 1000), [capture.startedAtMs, clock]);
@@ -617,6 +618,26 @@ export default function App() {
           </div>
           {error && <div className="alert error" role="alert">{error}</div>}
           {notice && <div className="alert success" role="status">{notice}</div>}
+          {missingDependencies.length > 0 && <section className="dependency-center">
+            <div className="section-heading">
+              <div><span className="eyebrow">SYSTEM SETUP</span><h2>Required components</h2></div>
+              <button className="text-button dependency-recheck" onClick={() => {
+                void invoke<DependencyReport>("check_dependencies").then(setDependencies).catch((reason) => setError(friendlyError(reason)));
+              }} disabled={installingDependency !== null}>Recheck</button>
+            </div>
+            {missingDependencies.map((dependency) => (
+              <div className="dependency-warning" key={dependency.id}>
+                <strong>{dependency.feature} is missing</strong>
+                <p>{dependency.remediation ?? dependency.impact}</p>
+                {dependency.canInstall
+                  ? <button className="secondary-button" onClick={() => void installDependency(dependency)}
+                      disabled={installingDependency !== null}>
+                      {installingDependency === dependency.id ? "Installing…" : "Install automatically"}
+                    </button>
+                  : <span className="dependency-manual-hint">Install this package with your distribution's Software Manager, then recheck.</span>}
+              </div>
+            ))}
+          </section>}
           {showCreate && (
             <form className="create-card" onSubmit={createProject}>
               <div><span className="eyebrow">NEW PROJECT</span><h2>Name your workspace</h2></div>
@@ -844,21 +865,7 @@ export default function App() {
                     : <button className="record-button" onClick={() => void startRecording()} disabled={busy || loading || ffmpeg?.status !== "available" || !selectedCaptureSource?.isAvailable}><span className="record-circle" />{busy ? "Starting…" : "Start recording"}</button>}
                   <span className="record-hint">{capture.isRecording ? "Keep Screenstory open until the MP4 is finalized." : "Recording begins after you press Start. Nothing is captured before then."}</span>
                 </div>
-                {(dependencies?.dependencies ?? []).filter((dependency) => dependency.status !== "available").map((dependency) => (
-                  <div className="dependency-warning" key={dependency.id}>
-                    <strong>{dependency.feature} is missing</strong>
-                    <p>{dependency.remediation ?? dependency.impact}</p>
-                    {dependency.canInstall
-                      ? <button className="secondary-button" onClick={() => void installDependency(dependency)}
-                          disabled={installingDependency !== null}>
-                          {installingDependency === dependency.id ? "Installing…" : "Install automatically"}
-                        </button>
-                      : <span className="dependency-manual-hint">Install this package with your distribution's Software Manager, then recheck.</span>}
-                  </div>
-                ))}
-                <button className="text-button dependency-recheck" onClick={() => {
-                  void invoke<DependencyReport>("check_dependencies").then(setDependencies).catch((reason) => setError(friendlyError(reason)));
-                }} disabled={installingDependency !== null}>Recheck dependencies</button>
+
               </section>
               <section className="recordings-card"><div className="section-heading"><div><span className="eyebrow">PROJECT LIBRARY</span><h2>Recordings</h2></div><span className="count-pill">{recordings.length}</span></div>
                 {recordings.length === 0 ? <div className="recordings-empty"><span className="empty-video-icon">▹</span><strong>No recordings yet</strong><p>Your saved desktop recordings will appear here.</p></div>
