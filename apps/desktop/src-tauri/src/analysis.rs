@@ -899,14 +899,14 @@ mod tests {
             "steps": [
                 {"type":"thought","signature":"ignored"},
                 {"type":"model_output","content":[
-                    {"type":"text","text":"{\\"schema_version\\":1,"},
-                    {"type":"text","text":"\\"summary\\":\\"Captured workflow\\"}"}
+                    {"type":"text","text":r#"{"schema_version":1,"#},
+                    {"type":"text","text":r#""summary":"Captured workflow"}"#}
                 ]}
             ]
         });
         assert_eq!(
             response_text(&payload).as_deref(),
-            Some("{\\"schema_version\\":1,\n\\"summary\\":\\"Captured workflow\\"}")
+            Some("{\"schema_version\":1,\n\"summary\":\"Captured workflow\"}")
         );
     }
 
