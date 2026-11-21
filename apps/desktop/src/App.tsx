@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 type AppInfo = { name: string; version: string; runtime: string };
-type Dependency = { id: string; feature: string; status: "available" | "missing" | "unsupported" | "error"; version: string | null; impact: string; canInstall: boolean; remediation: string | null };
+type Dependency = { id: string; feature: string; status: "available" | "missing" | "unsupported" | "error"; version: string | null; impact: string; packages?: string[]; canInstall: boolean; remediation: string | null };
+type DependencyInstallEvent = { dependencyId: string; stream: string; line: string };
 type DependencyReport = { dependencies: Dependency[] };
 type Project = { id: string; name: string; createdAt: string; updatedAt: string; recordingsCount: number };
 type Recording = {
@@ -81,6 +83,7 @@ export default function App() {
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [dependencies, setDependencies] = useState<DependencyReport | null>(null);
   const [installingDependency, setInstallingDependency] = useState<string | null>(null);
+  const [dependencyInstallOutput, setDependencyInstallOutput] = useState<string[]>([]);
   const [capture, setCapture] = useState<CaptureStatus>({ isRecording: false, fileName: null, startedAtMs: null });
   const [captureSources, setCaptureSources] = useState<CaptureSource[]>([]);
   const [selectedCaptureSourceId, setSelectedCaptureSourceId] = useState("");
@@ -106,38 +109,73 @@ export default function App() {
   const [renderBusy, setRenderBusy] = useState(false);
 
   const ffmpeg = dependencies?.dependencies.find((item) => item.id === "ffmpeg");
-  const missingDependencies = dependencies?.dependencies.filter((item) => item.status !== "available") ?? [];
+
   const selectedCaptureSource = captureSources.find((source) => source.id === selectedCaptureSourceId);
   const availableCaptureSources = captureSources.filter((source) => source.isAvailable);
   const elapsedSeconds = useMemo(() => capture.startedAtMs === null ? 0 : Math.floor((clock - capture.startedAtMs) / 1000), [capture.startedAtMs, clock]);
   const timelineDirty = !!timeline && savedTimelineSignature !== JSON.stringify(timeline);
   const renderInProgress = !!renderStatus && !["completed", "failed", "cancelled", "interrupted"].includes(renderStatus.status);
 
-  async function installDependency(dependency: Dependency) {
-    if (!dependency.canInstall || installingDependency) return;
+  async function installDependency(dependency: Dependency): Promise<boolean> {
+    if (!dependency.canInstall || installingDependency) return false;
+    const packages = dependency.packages ?? [];
+    if (packages.length === 0) {
+      setError("Screenstory could not determine a safe package list for this dependency.");
+      return false;
+    }
     const approved = window.confirm(
-      "Screenstory needs " + dependency.feature + ". Allow your system package manager to install it? Your system will show its normal administrator authentication prompt."
+      "Screenstory needs " + dependency.feature + ".\n\nPackages to install: " + packages.join(", ") +
+      "\n\nPurpose: " + dependency.impact +
+      "\n\nAPT will download and install these packages. No third-party repositories or signing keys will be added. Your system will request administrator approval."
     );
-    if (!approved) return;
+    if (!approved) return false;
 
     setInstallingDependency(dependency.id);
+    setDependencyInstallOutput([]);
     setError(null);
-    setNotice("Installing " + dependency.feature + " with your system package manager…");
+    setNotice("Installing " + dependency.feature + ". Approve the system authentication prompt…");
+    let unlisten: (() => void) | undefined;
     try {
+      unlisten = await listen<DependencyInstallEvent>("dependency-install-output", (event) => {
+        if (event.payload.dependencyId !== dependency.id) return;
+        setDependencyInstallOutput((current) => [...current.slice(-14), event.payload.line]);
+      });
       const report = await invoke<DependencyReport>("install_dependency", { dependencyId: dependency.id });
       setDependencies(report);
       const installed = report.dependencies.find((item) => item.id === dependency.id);
       if (installed?.status === "available") {
-        setNotice(dependency.feature + " is installed and ready.");
-      } else {
-        setNotice("Installation finished. Recheck the dependency status before using this feature.");
+        setNotice(dependency.feature + " is installed and verified. Screenstory can now use this feature.");
+        return true;
       }
+      setNotice(null);
+      setError("The package manager finished, but Screenstory could not verify " + dependency.feature + ". Recheck the system packages.");
+      return false;
     } catch (reason) {
       setNotice(null);
       setError(friendlyError(reason));
+      const refreshed = await invoke<DependencyReport>("check_dependencies").catch(() => null);
+      if (refreshed) setDependencies(refreshed);
+      return false;
     } finally {
+      unlisten?.();
       setInstallingDependency(null);
     }
+  }
+
+  async function ensureRuntimeDependency(dependencyId: string): Promise<boolean> {
+    const report = dependencies ?? await invoke<DependencyReport>("check_dependencies").catch(() => null);
+    if (report && !dependencies) setDependencies(report);
+    const dependency = report?.dependencies.find((item) => item.id === dependencyId);
+    if (!dependency) {
+      setError("Screenstory could not verify a required runtime component. Recheck system dependencies and try again.");
+      return false;
+    }
+    if (dependency.status === "available") return true;
+    if (dependency.status === "missing" && dependency.canInstall) {
+      return installDependency(dependency);
+    }
+    setError(dependency.remediation ?? dependency.impact);
+    return false;
   }
 
   async function refreshProjects() {
@@ -529,6 +567,20 @@ export default function App() {
     }
     setRenderBusy(true); setError(null); setNotice(null);
     try {
+      if (!await ensureRuntimeDependency("ffmpeg-export")) return;
+      const activeZooms = timeline.zoomSegments.some((zoom) =>
+        (zoom.origin === "manual" && zoom.approvalStatus !== "rejected")
+        || (zoom.origin === "ai" && zoom.approvalStatus === "accepted")
+      );
+      if (activeZooms && !await ensureRuntimeDependency("zoom-effects")) return;
+      if (timeline.annotations.length > 0) {
+        if (!await ensureRuntimeDependency("caption-rendering")) return;
+        if (!await ensureRuntimeDependency("caption-fonts")) return;
+        const includesArabic = timeline.annotations.some((annotation) =>
+          annotation.language !== "en" || /[\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF]/.test(annotation.text)
+        );
+        if (includesArabic && !await ensureRuntimeDependency("arabic-shaping")) return;
+      }
       const started = await invoke<RenderStarted>("start_render", {
         recordingId: timeline.recordingId,
         expectedRevision: timeline.revision,
@@ -557,6 +609,7 @@ export default function App() {
       if (!selectedCaptureSourceId || !selectedCaptureSource?.isAvailable) {
         throw new Error("Choose an available desktop or window source before starting a recording.");
       }
+      if (!await ensureRuntimeDependency("ffmpeg")) return;
       const started = await invoke<{ fileName: string; startedAtMs: number }>("start_recording", {
         captureSourceId: selectedCaptureSourceId,
       });
@@ -618,25 +671,10 @@ export default function App() {
           </div>
           {error && <div className="alert error" role="alert">{error}</div>}
           {notice && <div className="alert success" role="status">{notice}</div>}
-          {missingDependencies.length > 0 && <section className="dependency-center">
-            <div className="section-heading">
-              <div><span className="eyebrow">SYSTEM SETUP</span><h2>Required components</h2></div>
-              <button className="text-button dependency-recheck" onClick={() => {
-                void invoke<DependencyReport>("check_dependencies").then(setDependencies).catch((reason) => setError(friendlyError(reason)));
-              }} disabled={installingDependency !== null}>Recheck</button>
-            </div>
-            {missingDependencies.map((dependency) => (
-              <div className="dependency-warning" key={dependency.id}>
-                <strong>{dependency.feature} is missing</strong>
-                <p>{dependency.remediation ?? dependency.impact}</p>
-                {dependency.canInstall
-                  ? <button className="secondary-button" onClick={() => void installDependency(dependency)}
-                      disabled={installingDependency !== null}>
-                      {installingDependency === dependency.id ? "Installing…" : "Install automatically"}
-                    </button>
-                  : <span className="dependency-manual-hint">Install this package with your distribution's Software Manager, then recheck.</span>}
-              </div>
-            ))}
+          {installingDependency && <section className="dependency-install-progress" role="status">
+            <strong>Installing {dependencies?.dependencies.find((item) => item.id === installingDependency)?.feature ?? "system dependency"}</strong>
+            <p>Follow the administrator authentication prompt. Screenstory will verify the capability after APT finishes.</p>
+            <pre>{dependencyInstallOutput.length ? dependencyInstallOutput.join("\n") : "Waiting for the system package manager…"}</pre>
           </section>}
           {showCreate && (
             <form className="create-card" onSubmit={createProject}>
@@ -862,7 +900,7 @@ export default function App() {
                     <small>{capture.isRecording ? capture.fileName : (selectedCaptureSource?.name ?? "Choose a capture source above.")}</small></div></div></div>
                 <div className="record-controls">
                   {capture.isRecording ? <button className="stop-button" onClick={() => void stopRecording()} disabled={busy}><span className="stop-square" />{busy ? "Finalizing MP4…" : "Stop & save"}</button>
-                    : <button className="record-button" onClick={() => void startRecording()} disabled={busy || loading || ffmpeg?.status !== "available" || !selectedCaptureSource?.isAvailable}><span className="record-circle" />{busy ? "Starting…" : "Start recording"}</button>}
+                    : <button className="record-button" onClick={() => void startRecording()} disabled={busy || loading || !selectedCaptureSource?.isAvailable}><span className="record-circle" />{busy ? "Starting…" : ffmpeg?.status === "missing" ? "Set up & start recording" : "Start recording"}</button>}
                   <span className="record-hint">{capture.isRecording ? "Keep Screenstory open until the MP4 is finalized." : "Recording begins after you press Start. Nothing is captured before then."}</span>
                 </div>
 
