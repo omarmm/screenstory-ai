@@ -199,7 +199,7 @@ pub fn delete_gemini_api_key() -> Result<GeminiKeyStatus, AppError> {
     }
 }
 
-fn ensure_analysis_table(project_dir: &Path) -> Result<(), AppError> {
+pub(super) fn ensure_analysis_table(project_dir: &Path) -> Result<(), AppError> {
     let connection = db_connection(project_dir)?;
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS analysis_runs (
