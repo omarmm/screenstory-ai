@@ -51,6 +51,8 @@ class ScreenstoryRecorder:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.process: subprocess.Popen | None = None
+        self.capture_process: subprocess.Popen | None = None
+        self.window_choices: dict[str, tuple[str, int, int]] = {}
         self.log_handle = None
         self.output_file: Path | None = None
         self.started_at: float | None = None
@@ -61,9 +63,13 @@ class ScreenstoryRecorder:
         self.status = tk.StringVar(value="Ready to record")
         self.elapsed = tk.StringVar(value="00:00:00")
         self.source_info = tk.StringVar(value=self.describe_source())
+        self.source_mode = tk.StringVar(value="desktop")
+        self.selected_window = tk.StringVar(value="")
 
         self.build_ui()
         self.check_readiness()
+        self.refresh_windows()
+        self.update_source_controls()
 
     def describe_source(self) -> str:
         session = os.environ.get("XDG_SESSION_TYPE", "unknown").lower()
@@ -90,11 +96,22 @@ class ScreenstoryRecorder:
         source = ttk.LabelFrame(outer, text="Recording source", padding=12)
         source.pack(fill="x")
         ttk.Label(source, textvariable=self.source_info).pack(anchor="w")
-        ttk.Label(
-            source,
-            text="First prototype: full desktop recording on X11.",
-            foreground="#666666",
-        ).pack(anchor="w", pady=(5, 0))
+        source_row = ttk.Frame(source)
+        source_row.pack(fill="x", pady=(8, 0))
+        ttk.Radiobutton(source_row, text="Full desktop", variable=self.source_mode,
+                        value="desktop", command=self.update_source_controls).pack(side="left")
+        ttk.Radiobutton(source_row, text="A window", variable=self.source_mode,
+                        value="window", command=self.update_source_controls).pack(side="left", padx=(12, 0))
+        self.window_combo = ttk.Combobox(source, textvariable=self.selected_window,
+                                         state="readonly", width=48)
+        self.window_combo.pack(fill="x", pady=(7, 0))
+        window_actions = ttk.Frame(source)
+        window_actions.pack(fill="x", pady=(5, 0))
+        self.refresh_windows_button = ttk.Button(window_actions, text="Refresh windows",
+                                                  command=self.refresh_windows)
+        self.refresh_windows_button.pack(side="left")
+        self.window_hint = ttk.Label(window_actions, text="X11 window capture via XComposite")
+        self.window_hint.pack(side="left", padx=(10, 0))
 
         destination = ttk.LabelFrame(outer, text="Save recordings to", padding=12)
         destination.pack(fill="x", pady=12)
@@ -123,10 +140,61 @@ class ScreenstoryRecorder:
             wraplength=500,
         ).pack(anchor="center", pady=(18, 0))
 
+    def update_source_controls(self) -> None:
+        window_mode = self.source_mode.get() == "window"
+        self.window_combo.configure(state="readonly" if window_mode else "disabled")
+        self.refresh_windows_button.configure(state="normal" if window_mode else "disabled")
+
+    def refresh_windows(self) -> None:
+        self.window_choices.clear()
+        if not shutil.which("wmctrl"):
+            self.window_combo["values"] = []
+            self.window_hint.configure(text="Install wmctrl to list windows")
+            return
+        result = subprocess.run(["wmctrl", "-lG"], capture_output=True, text=True, check=False)
+        labels = []
+        for line in result.stdout.splitlines():
+            parts = line.split(maxsplit=7)
+            if len(parts) < 7:
+                continue
+            wid, _desktop, _x, _y, width, height, host = parts[:7]
+            title = parts[7] if len(parts) > 7 else "(untitled)"
+            if int(width) < 80 or int(height) < 60:
+                continue
+            label = f"{title}  [{wid}]"
+            self.window_choices[label] = (wid, int(width), int(height))
+            labels.append(label)
+        self.window_combo["values"] = labels
+        if labels and self.selected_window.get() not in self.window_choices:
+            self.selected_window.set(labels[0])
+        self.window_hint.configure(text=f"{len(labels)} windows found")
+
+    def build_capture_helper(self) -> Path:
+        source = Path(__file__).with_name("xcomposite_capture.c")
+        cache = Path.home() / ".cache" / "screenstory"
+        cache.mkdir(parents=True, exist_ok=True)
+        binary = cache / "xcomposite_capture"
+        if binary.exists() and binary.stat().st_mtime >= source.stat().st_mtime:
+            return binary
+        if not shutil.which("cc") or not shutil.which("pkg-config"):
+            raise RuntimeError("Window capture needs a C compiler and pkg-config. Install: sudo apt install build-essential pkg-config libx11-dev libxcomposite-dev")
+        flags = subprocess.run(["pkg-config", "--cflags", "--libs", "x11", "xcomposite"],
+                                capture_output=True, text=True, check=False)
+        if flags.returncode != 0:
+            raise RuntimeError("X11/XComposite development files are missing. Install: sudo apt install build-essential pkg-config libx11-dev libxcomposite-dev")
+        command = ["cc", "-O2", "-Wall", "-Wextra", str(source), "-o", str(binary)]
+        command.extend(flags.stdout.split())
+        built = subprocess.run(command, capture_output=True, text=True, check=False)
+        if built.returncode != 0:
+            raise RuntimeError("Could not build XComposite helper:\n" + built.stderr)
+        return binary
+
     def check_readiness(self) -> None:
         problems = []
         if not shutil.which("ffmpeg"):
             problems.append("FFmpeg was not found.")
+        if self.source_mode.get() == "window" and not shutil.which("wmctrl"):
+            problems.append("Install wmctrl to select a window.")
         if os.environ.get("XDG_SESSION_TYPE", "").lower() != "x11":
             problems.append("This prototype currently supports X11 sessions only.")
         if not os.environ.get("DISPLAY"):
@@ -160,6 +228,12 @@ class ScreenstoryRecorder:
 
         try:
             width, height = screen_size()
+            window = None
+            if self.source_mode.get() == "window":
+                window = self.window_choices.get(self.selected_window.get())
+                if not window:
+                    raise RuntimeError("Select a window first, then click Refresh windows if needed.")
+                width, height = window[1], window[2]
             output_dir = Path(self.output_dir.get()).expanduser()
             output_dir.mkdir(parents=True, exist_ok=True)
             stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -167,25 +241,42 @@ class ScreenstoryRecorder:
             log_file = output_dir / f"Screenstory-{stamp}.log"
             self.log_handle = log_file.open("w", encoding="utf-8")
 
-            command = [
-                "ffmpeg", "-hide_banner", "-y", "-loglevel", "warning",
-                "-f", "x11grab", "-framerate", "30", "-draw_mouse", "1",
-                "-video_size", f"{width}x{height}", "-i", os.environ["DISPLAY"],
-                "-an", "-c:v", "libx264", "-preset", "ultrafast",
-                "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-                str(self.output_file),
-            ]
-            self.process = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=self.log_handle,
-                text=True,
-            )
+            if window:
+                helper = self.build_capture_helper()
+                self.capture_process = subprocess.Popen(
+                    [str(helper), window[0]], stdout=subprocess.PIPE,
+                    stderr=self.log_handle, bufsize=0
+                )
+                command = [
+                    "ffmpeg", "-hide_banner", "-y", "-loglevel", "warning",
+                    "-f", "rawvideo", "-pixel_format", "rgb24",
+                    "-video_size", f"{width}x{height}", "-framerate", "30",
+                    "-i", "pipe:0", "-an", "-c:v", "libx264",
+                    "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart", str(self.output_file),
+                ]
+                self.process = subprocess.Popen(
+                    command, stdin=self.capture_process.stdout,
+                    stdout=subprocess.DEVNULL, stderr=self.log_handle
+                )
+                self.capture_process.stdout.close()
+            else:
+                command = [
+                    "ffmpeg", "-hide_banner", "-y", "-loglevel", "warning",
+                    "-f", "x11grab", "-framerate", "30", "-draw_mouse", "1",
+                    "-video_size", f"{width}x{height}", "-i", os.environ["DISPLAY"],
+                    "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                    str(self.output_file),
+                ]
+                self.process = subprocess.Popen(
+                    command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    stderr=self.log_handle, text=True,
+                )
             self.started_at = dt.datetime.now().timestamp()
             self.record_button.configure(state="disabled")
             self.stop_button.configure(state="normal")
-            self.status.set("Recording · full desktop")
+            self.status.set("Recording · " + ("selected window" if window else "full desktop"))
             self.tick()
         except Exception as exc:
             self.cleanup_process()
@@ -229,6 +320,10 @@ class ScreenstoryRecorder:
         self.root.after(0, self.finish_recording)
 
     def cleanup_process(self) -> None:
+        if self.capture_process is not None:
+            if self.capture_process.poll() is None:
+                self.capture_process.terminate()
+            self.capture_process = None
         if self.log_handle:
             self.log_handle.close()
             self.log_handle = None
