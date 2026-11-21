@@ -629,7 +629,18 @@ fn remove_managed_directory(root: &Path, child_name: &str, code: &'static str, m
     {
         return Err(AppError::new("DELETE_PATH_INVALID", "A managed folder identifier is invalid."));
     }
-    let root = root.canonicalize().map_err(|_| AppError::new(code, message))?;
+    let parent = root.parent()
+        .ok_or_else(|| AppError::new("DELETE_PATH_INVALID", "The managed folder has no project parent."))?
+        .canonicalize()
+        .map_err(|_| AppError::new(code, message))?;
+    let root = match root.canonicalize() {
+        Ok(root) => root,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(AppError::new(code, message)),
+    };
+    if !root.starts_with(&parent) || root == parent {
+        return Err(AppError::new("DELETE_PATH_INVALID", "The managed folder resolved outside the project."));
+    }
     let target = root.join(child_name);
     let metadata = match fs::symlink_metadata(&target) {
         Ok(metadata) => metadata,
@@ -647,11 +658,18 @@ fn remove_managed_directory(root: &Path, child_name: &str, code: &'static str, m
 }
 
 fn remove_managed_export(exports_root: &Path, stored_path: &str) -> Result<(), AppError> {
+    let parent = exports_root.parent()
+        .ok_or_else(|| AppError::new("DELETE_PATH_INVALID", "The exports folder has no project parent."))?
+        .canonicalize()
+        .map_err(|_| AppError::new("RECORDING_DELETE_FAILED", "The recording's export folder could not be inspected."))?;
     let root = match exports_root.canonicalize() {
         Ok(root) => root,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err(AppError::new("RECORDING_DELETE_FAILED", "The recording's export folder could not be inspected.")),
     };
+    if !root.starts_with(&parent) || root == parent {
+        return Err(AppError::new("DELETE_PATH_INVALID", "The exports folder resolved outside the project."));
+    }
     let candidate = PathBuf::from(stored_path);
     let metadata = match fs::symlink_metadata(&candidate) {
         Ok(metadata) => metadata,
@@ -754,7 +772,10 @@ fn delete_recording(recording_id: String, state: State<'_, AppState>) -> Result<
         if valid_render_run_id(render_id) {
             remove_managed_export(&exports_root, output_path)?;
             let _ = fs::remove_file(exports_root.join(format!("{render_id}.partial.mp4")));
-            let _ = fs::remove_dir_all(exports_root.join(".render-cache").join(render_id));
+            if exports_root.join(".render-cache").is_dir() {
+                remove_managed_directory(&exports_root.join(".render-cache"), render_id,
+                    "RECORDING_DELETE_FAILED", "The render cache could not be removed.")?;
+            }
         }
     }
 
