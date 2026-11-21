@@ -63,8 +63,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fontconfig fonts-noto-core
-          ffmpeg -hide_banner -h filter=drawtext 2>&1 | grep -q text_shaping
-          fc-match -f '%{file}\n' 'sans:lang=ar' | grep -q .
+          ffmpeg -hide_banner -h filter=ass 2>&1 | grep -q shaping
+          fc-match -f '%{family}\n' 'Noto Sans Arabic:lang=ar' | grep -qi 'Noto Sans Arabic'
+          fc-match -f '%{family}\n' 'Noto Sans' | grep -qi 'Noto Sans'
       - name: Install Tauri Linux build dependencies
         run: |
           sudo apt-get update

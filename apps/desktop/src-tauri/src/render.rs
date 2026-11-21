@@ -205,7 +205,10 @@ fn has_arabic_text(value: &str) -> bool {
 
 fn active_zoom_segments(document: &timeline::TimelineDocument) -> Vec<&timeline::TimelineZoomSegment> {
     let mut zooms = document.zoom_segments.iter()
-        .filter(|zoom| zoom.origin == "manual" || zoom.approval_status == "accepted")
+        .filter(|zoom| {
+            (zoom.origin == "manual" && zoom.approval_status != "rejected")
+                || (zoom.origin == "ai" && zoom.approval_status == "accepted")
+        })
         .collect::<Vec<_>>();
     zooms.sort_by_key(|zoom| zoom.start_ms);
     zooms
@@ -213,33 +216,41 @@ fn active_zoom_segments(document: &timeline::TimelineDocument) -> Vec<&timeline:
 
 fn ffnum(value: f64) -> String { format!("{value:.6}") }
 
-fn zoompan_expressions(zooms: &[&timeline::TimelineZoomSegment]) -> (String, String, String) {
+fn zoompan_expressions(zooms: &[&timeline::TimelineZoomSegment], frame_rate: &str) -> (String, String, String) {
+    let fps = parse_frame_rate(frame_rate).unwrap_or(30.0);
     let mut z = "1".to_string();
     let mut x = "0".to_string();
     let mut y = "0".to_string();
     for zoom in zooms.iter().rev() {
-        let start = ffnum(zoom.start_ms as f64 / 1000.0);
-        let end = ffnum(zoom.end_ms as f64 / 1000.0);
-        let transition = zoom.transition_duration_ms as f64 / 1000.0;
-        let segment_z = if transition > 0.0 {
-            let t = ffnum(transition);
-            let p = format!("min(min(max((it-{start})/{t},0),1),min(max(({end}-it)/{t},0),1))");
+        // zoompan exposes the output-frame counter (on), not the input timestamp (it).
+        // Convert all timeline times to the source frame domain so 24/30/60 FPS
+        // recordings use the same frame-accurate zoom boundaries.
+        let start_frame = (zoom.start_ms as f64 * fps / 1000.0).round() as u64;
+        let end_frame = (zoom.end_ms as f64 * fps / 1000.0).round() as u64;
+        if start_frame >= end_frame { continue; }
+        let transition_frames = ((zoom.transition_duration_ms as f64 * fps / 1000.0).round() as u64)
+            .min((end_frame - start_frame) / 2);
+        let segment_z = if transition_frames > 0 {
+            let t = transition_frames.to_string();
+            let p = format!(
+                "min(max((on-{start_frame})/{t}\\,0)\\,min(max(({end_frame}-on)/{t}\\,0)\\,1))"
+            );
             format!("1+({}-1)*({p})", ffnum(zoom.target_scale))
         } else {
             ffnum(zoom.target_scale)
         };
-        let cond = format!("between(it,{start},{end})");
-        z = format!("if({cond},{segment_z},{z})");
+        let cond = format!("between(on\\,{start_frame}\\,{end_frame})");
+        z = format!("if({cond}\\,{segment_z}\\,{z})");
         let cx = ffnum(zoom.x + zoom.width / 2.0);
         let cy = ffnum(zoom.y + zoom.height / 2.0);
-        x = format!("if({cond},max(0,min(iw-iw/zoom,iw*{cx}-iw/zoom/2)),{x})");
-        y = format!("if({cond},max(0,min(ih-ih/zoom,ih*{cy}-ih/zoom/2)),{y})");
+        x = format!("if({cond}\\,max(0\\,min(iw-iw/zoom\\,iw*{cx}-iw/(2*zoom)))\\,{x})");
+        y = format!("if({cond}\\,max(0\\,min(ih-ih/zoom\\,ih*{cy}-ih/(2*zoom)))\\,{y})");
     }
     (z, x, y)
 }
 
 fn zoompan_filter(zooms: &[&timeline::TimelineZoomSegment], width: u32, height: u32, frame_rate: &str) -> String {
-    let (z, x, y) = zoompan_expressions(zooms);
+    let (z, x, y) = zoompan_expressions(zooms, frame_rate);
     format!("zoompan=z='{z}':x='{x}':y='{y}':d=1:s={width}x{height}:fps={frame_rate}")
 }
 
@@ -352,9 +363,30 @@ fn build_render_request(project_dir: &Path, run_id: String, recording_id: String
     if !document.annotations.is_empty() && !filter_is_available("ass") {
         return Err(AppError::new("ASS_FILTER_UNAVAILABLE", "This FFmpeg build does not include the libass subtitle filter needed to render captions."));
     }
-    let shaping = if document.annotations.iter().any(|a| a.language != "en" || has_arabic_text(&a.text)) {
-        ass_shaping_mode()
-    } else { "not_required".to_string() };
+    let requires_arabic = document.annotations.iter().any(|a| a.language != "en" || has_arabic_text(&a.text));
+    if requires_arabic {
+        let font = Command::new("fc-match")
+            .args(["-f", "%{family}", "Noto Sans Arabic:lang=ar"])
+            .output()
+            .map_err(|_| AppError::new("FONTCONFIG_MISSING", "Fontconfig is required to verify Arabic caption fonts."))?;
+        let family = String::from_utf8_lossy(&font.stdout);
+        if !font.status.success() || !family.to_lowercase().contains("noto sans arabic") {
+            return Err(AppError::new("ARABIC_FONT_MISSING", "Noto Sans Arabic is required to render Arabic captions. Install the Noto Core fonts, then retry."));
+        }
+    }
+    if !document.annotations.is_empty() {
+        let font = Command::new("fc-match")
+            .args(["-f", "%{family}", "Noto Sans"])
+            .output()
+            .map_err(|_| AppError::new("FONTCONFIG_MISSING", "Fontconfig is required to verify caption fonts."))?;
+        if !font.status.success() || String::from_utf8_lossy(&font.stdout).trim().is_empty() {
+            return Err(AppError::new("CAPTION_FONT_MISSING", "A supported Noto Sans font is required to render captions."));
+        }
+    }
+    let shaping = if requires_arabic { ass_shaping_mode() } else { "not_required".to_string() };
+    if requires_arabic && shaping == "auto" {
+        return Err(AppError::new("ARABIC_SHAPING_UNAVAILABLE", "This FFmpeg/libass build cannot confirm complex Arabic text shaping. Use a build with HarfBuzz support."));
+    }
     let export_dir = project_dir.join("exports");
     fs::create_dir_all(&export_dir).map_err(|_| AppError::new("EXPORT_STORAGE_FAILED", "The project's export folder could not be created."))?;
     let output_dir = export_dir.canonicalize().map_err(|_| AppError::new("EXPORT_STORAGE_FAILED", "The project's export folder is unavailable."))?;
@@ -628,10 +660,11 @@ mod tests {
     #[test]
     fn zoompan_expression_uses_input_timestamps_and_transition_ramps() {
         let item = zoom("accepted");
-        let (z, x, y) = zoompan_expressions(&[&item]);
-        assert!(z.contains("between(it,1.000000,4.000000)"));
-        assert!(z.contains("max((it-1.000000)/0.250000,0)"));
+        let (z, x, y) = zoompan_expressions(&[&item], "30/1");
+        assert!(z.contains("between(on\\,30\\,120)"));
+        assert!(z.contains("max((on-30)/8"));
         assert!(x.contains("iw/zoom"));
+        assert!(x.contains("\\,"));
         assert!(y.contains("ih/zoom"));
     }
 

@@ -8,6 +8,13 @@ type DependencyReport = { dependencies: Dependency[] };
 type Project = { id: string; name: string; createdAt: string; updatedAt: string; recordingsCount: number };
 type Recording = { id: string; fileName: string; createdAt: string; durationSeconds: number };
 type CaptureStatus = { isRecording: boolean; fileName: string | null; startedAtMs: number | null };
+type RenderStarted = { runId: string; timelineId: string; timelineRevision: number; outputFileName: string };
+type RenderStatus = {
+  runId: string; recordingId: string; timelineId: string; timelineRevision: number; status: string;
+  progress: number; outputFileName: string; outputPath: string | null; outputSizeBytes: number;
+  durationSeconds: number; errorCode: string | null; rendererVersion: string;
+  hasAudio: boolean; annotationCount: number; activeZoomCount: number;
+};
 type AnalysisStatus = {
   runId: string; recordingId: string; sourceFileName: string; status: string;
   completedFrames: number; totalFrames: number; totalBytes: number;
@@ -84,9 +91,13 @@ export default function App() {
   const [credentialStoreAvailable, setCredentialStoreAvailable] = useState(true);
   const [timeline, setTimeline] = useState<TimelineDocument | null>(null);
   const [timelineBusy, setTimelineBusy] = useState(false);
+  const [savedTimelineSignature, setSavedTimelineSignature] = useState<string | null>(null);
+  const [renderStatus, setRenderStatus] = useState<RenderStatus | null>(null);
+  const [renderBusy, setRenderBusy] = useState(false);
 
   const ffmpeg = dependencies?.dependencies.find((item) => item.id === "ffmpeg");
   const elapsedSeconds = useMemo(() => capture.startedAtMs === null ? 0 : Math.floor((clock - capture.startedAtMs) / 1000), [capture.startedAtMs, clock]);
+  const timelineDirty = !!timeline && savedTimelineSignature !== JSON.stringify(timeline);
 
   async function refreshProjects() {
     const [allProjects, current] = await Promise.all([
@@ -141,6 +152,17 @@ export default function App() {
   }, [activeAnalysis?.runId, activeAnalysis?.status, analysisDraft]);
 
   useEffect(() => {
+    if (!renderStatus?.runId || ["completed", "failed", "cancelled"].includes(renderStatus.status)) return;
+    const runId = renderStatus.runId;
+    const timer = window.setInterval(() => {
+      void invoke<RenderStatus>("get_render_status", { runId })
+        .then(setRenderStatus)
+        .catch((reason) => setError(friendlyError(reason)));
+    }, 700);
+    return () => window.clearInterval(timer);
+  }, [renderStatus?.runId, renderStatus?.status]);
+
+  useEffect(() => {
     if (!capture.isRecording) return;
     const timer = window.setInterval(() => setClock(Date.now()), 500);
     return () => window.clearInterval(timer);
@@ -161,7 +183,7 @@ export default function App() {
     setBusy(true); setError(null);
     try {
       const opened = await invoke<Project>("open_project", { projectId: project.id });
-      setActiveProject(opened); setActiveAnalysis(null); setAnalysisDraft(null); setTimeline(null); setNotice("Opened “" + opened.name + "”.");
+      setActiveProject(opened); setActiveAnalysis(null); setAnalysisDraft(null); setTimeline(null); setSavedTimelineSignature(null); setRenderStatus(null); setNotice("Opened “" + opened.name + "”.");
       await refreshProjects();
     } catch (reason) { setError(friendlyError(reason)); }
     finally { setBusy(false); }
@@ -234,6 +256,8 @@ export default function App() {
     try {
       const created = await invoke<TimelineDocument>("create_timeline_from_draft", { runId: activeAnalysis.runId });
       setTimeline(created);
+      setSavedTimelineSignature(JSON.stringify(created));
+      setRenderStatus(null);
       setNotice("Editable timeline created at revision " + created.revision + ". The AI draft and original recording remain unchanged.");
     } catch (reason) { setError(friendlyError(reason)); }
     finally { setTimelineBusy(false); }
@@ -244,9 +268,13 @@ export default function App() {
       const opened = await invoke<TimelineDocument | null>("get_timeline_for_recording", { recordingId: recording.id });
       if (!opened) {
         setTimeline(null);
+        setSavedTimelineSignature(null);
+        setRenderStatus(null);
         setNotice("No editable timeline exists for this recording yet. Complete an AI analysis and choose Create editable timeline.");
       } else {
         setTimeline(opened);
+        setSavedTimelineSignature(JSON.stringify(opened));
+        setRenderStatus(null);
         setNotice("Opened timeline · revision " + opened.revision + ".");
       }
     } catch (reason) { setError(friendlyError(reason)); }
@@ -356,6 +384,7 @@ export default function App() {
     try {
       const saved = await invoke<TimelineDocument>("save_timeline", { timeline, expectedRevision: timeline.revision });
       setTimeline(saved);
+      setSavedTimelineSignature(JSON.stringify(saved));
       setNotice("Timeline saved · revision " + saved.revision + ". Previous revisions remain available.");
     } catch (reason) { setError(friendlyError(reason)); }
     finally { setTimelineBusy(false); }
@@ -365,9 +394,39 @@ export default function App() {
     setTimelineBusy(true); setError(null);
     try {
       const latest = await invoke<TimelineDocument | null>("get_timeline_for_recording", { recordingId: timeline.recordingId });
-      if (latest) { setTimeline(latest); setNotice("Loaded the latest saved timeline revision."); }
+      if (latest) { setTimeline(latest); setSavedTimelineSignature(JSON.stringify(latest)); setRenderStatus(null); setNotice("Loaded the latest saved timeline revision."); }
     } catch (reason) { setError(friendlyError(reason)); }
     finally { setTimelineBusy(false); }
+  }
+
+  async function startExport() {
+    if (!timeline) return;
+    if (timelineDirty) {
+      setError("Save your timeline revision before exporting. Screenstory never exports unsaved edits.");
+      return;
+    }
+    setRenderBusy(true); setError(null); setNotice(null);
+    try {
+      const started = await invoke<RenderStarted>("start_render", {
+        recordingId: timeline.recordingId,
+        expectedRevision: timeline.revision,
+      });
+      const initial = await invoke<RenderStatus>("get_render_status", { runId: started.runId });
+      setRenderStatus(initial);
+      setNotice("MP4 export started · timeline revision " + started.timelineRevision + ".");
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setRenderBusy(false); }
+  }
+  async function cancelExport() {
+    if (!renderStatus || ["completed", "failed", "cancelled"].includes(renderStatus.status)) return;
+    setRenderBusy(true);
+    try {
+      await invoke("cancel_render", { runId: renderStatus.runId });
+      const next = await invoke<RenderStatus>("get_render_status", { runId: renderStatus.runId });
+      setRenderStatus(next);
+      setNotice("Export cancellation requested. The source recording and saved timeline remain unchanged.");
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setRenderBusy(false); }
   }
 
   async function startRecording() {
@@ -521,6 +580,7 @@ export default function App() {
                     <button className="secondary-button" onClick={() => void reloadTimeline()} disabled={timelineBusy}>Reload latest</button>
                     <button className="secondary-button" onClick={sortTimelineSteps} disabled={timelineBusy}>Sort by start time</button>
                     <button className="primary-button" onClick={() => void saveTimeline()} disabled={timelineBusy}>{timelineBusy ? "Saving…" : "Save revision"}</button>
+                    <button className="primary-button export-button" onClick={() => void startExport()} disabled={timelineBusy || renderBusy || timelineDirty || capture.isRecording || (!!renderStatus && !["completed", "failed", "cancelled"].includes(renderStatus.status))}>{renderBusy ? "Preparing…" : "Export MP4"}</button>
                   </div>
                   <div className="timeline-step-list">
                     {timeline.steps.map((step, index) => (
@@ -597,7 +657,20 @@ export default function App() {
                         </div>
                       </article>
                     ))}
-                    <div className="pending-zoom-note">Accepted zooms and captions are saved in the timeline. This build does not composite them into video yet; preview and MP4 rendering follow in the renderer milestone. Arabic shaping will be verified with the rendering engine before export is enabled.</div>
+                    {timelineDirty && <div className="pending-zoom-note">You have unsaved timeline edits. Save a new revision before exporting; the source recording is never changed.</div>}
+                    {renderStatus && (
+                      <section className="render-progress-card" aria-live="polite">
+                        <div className="section-heading">
+                          <div><span className="eyebrow">MP4 EXPORT · REVISION {renderStatus.timelineRevision}</span><h3>{renderStatus.outputFileName}</h3></div>
+                          <span className={"analysis-status-pill " + renderStatus.status}>{renderStatus.status.replaceAll("_", " ")}</span>
+                        </div>
+                        <div className="progress-track"><span style={{ width: renderStatus.progress + "%" }} /></div>
+                        <small>{renderStatus.status === "completed" ? "Export verified · " + (renderStatus.outputSizeBytes / (1024 * 1024)).toFixed(1) + " MiB" : renderStatus.status === "failed" ? "Export failed · " + (renderStatus.errorCode ?? "unknown error") : renderStatus.status === "cancelled" ? "Export cancelled. No partial MP4 was kept." : renderStatus.progress + "% · Processing source video"}</small>
+                        {renderStatus.status === "completed" && renderStatus.outputPath && <div className="export-result"><strong>Your tutorial is ready</strong><p>{renderStatus.outputPath}</p><span>{renderStatus.activeZoomCount} zoom effects · {renderStatus.annotationCount} captions · {renderStatus.hasAudio ? "source audio preserved" : "no source audio"}</span></div>}
+                        {!["completed", "failed", "cancelled"].includes(renderStatus.status) && <div className="analysis-actions"><button className="secondary-button compact" onClick={() => void cancelExport()} disabled={renderBusy}>Cancel export</button></div>}
+                      </section>
+                    )}
+
                   </section>
                 </section>
               )}
