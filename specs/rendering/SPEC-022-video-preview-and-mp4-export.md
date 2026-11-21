@@ -65,7 +65,7 @@ Compose an immutable source MP4 with the current validated timeline into a previ
 
 ## 7. Resource constraints
 
-- Bound output dimensions, duration, process count and temporary disk use.
+- Bound output dimensions, duration, process count and temporary disk use. Before starting FFmpeg, query free space for the export filesystem and refuse the export with a clear estimate when the conservative required-space threshold is not met.
 - Never hold entire video data in memory.
 - Check available disk space before render and show expected output/temporary storage estimate.
 - Avoid CPU-intensive work on the UI thread.

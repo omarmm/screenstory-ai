@@ -192,6 +192,9 @@ fn probe_video(path: &Path) -> Result<VideoInfo, AppError> {
         .ok_or_else(|| AppError::new("VIDEO_STREAM_MISSING", "The recording does not contain a video stream."))?;
     let width = video.width.filter(|v| *v > 0).ok_or_else(|| AppError::new("VIDEO_DIMENSIONS_INVALID", "The source video width is invalid."))?;
     let height = video.height.filter(|v| *v > 0).ok_or_else(|| AppError::new("VIDEO_DIMENSIONS_INVALID", "The source video height is invalid."))?;
+    if width > 7680 || height > 4320 || u64::from(width) * u64::from(height) > 33_177_600 {
+        return Err(AppError::new("VIDEO_DIMENSIONS_UNSUPPORTED", "Tutorial exports support source videos up to 8K UHD dimensions."));
+    }
     let frame_rate = video.avg_frame_rate.clone().filter(|v| v != "0/0" && v != "N/A")
         .ok_or_else(|| AppError::new("VIDEO_FRAME_RATE_INVALID", "The source frame rate could not be determined."))?;
     let rate = parse_frame_rate(&frame_rate).ok_or_else(|| AppError::new("VIDEO_FRAME_RATE_INVALID", "The source frame rate is invalid."))?;
@@ -365,6 +368,46 @@ fn update_render_run(project_dir: &Path, run_id: &str, status: &str, progress: u
     }
 }
 
+fn available_space_bytes(path: &Path) -> Result<u64, AppError> {
+    let output = Command::new("df")
+        .args(["--output=avail", "-k"])
+        .arg(path)
+        .output()
+        .map_err(|_| AppError::new("DISK_SPACE_CHECK_FAILED", "Could not check free space in the project's export folder."))?;
+    if !output.status.success() {
+        return Err(AppError::new("DISK_SPACE_CHECK_FAILED", "Could not check free space in the project's export folder."));
+    }
+    let value = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .last()
+        .and_then(|line| line.trim().parse::<u64>().ok())
+        .ok_or_else(|| AppError::new("DISK_SPACE_CHECK_FAILED", "The available disk space could not be determined."))?;
+    value.checked_mul(1024)
+        .ok_or_else(|| AppError::new("DISK_SPACE_CHECK_FAILED", "The available disk space value is invalid."))
+}
+
+fn ensure_render_space(path: &Path, duration_seconds: f64) -> Result<(), AppError> {
+    // Conservative allowance for a high-motion screen capture plus temporary output.
+    // The check is a preflight only; runtime write errors are still handled normally.
+    const SAFETY_MARGIN: u64 = 256 * 1024 * 1024;
+    const ESTIMATED_BYTES_PER_SECOND: u64 = 1024 * 1024;
+    let estimated = (duration_seconds.ceil() as u64)
+        .saturating_mul(ESTIMATED_BYTES_PER_SECOND)
+        .saturating_add(SAFETY_MARGIN);
+    let available = available_space_bytes(path)?;
+    if available < estimated {
+        return Err(AppError::new(
+            "INSUFFICIENT_EXPORT_SPACE",
+            format!(
+                "Not enough free space for a safe export. About {:.0} MiB is recommended; {:.0} MiB is available. Free space and try again.",
+                estimated as f64 / (1024.0 * 1024.0),
+                available as f64 / (1024.0 * 1024.0)
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn build_render_request(project_dir: &Path, run_id: String, recording_id: String, expected_revision: u64) -> Result<RenderRequest, AppError> {
     let (timeline_id, source_run, current_revision, current_snapshot): (String, String, i64, String) =
         db_connection(project_dir)?.query_row(
@@ -427,6 +470,7 @@ fn build_render_request(project_dir: &Path, run_id: String, recording_id: String
     let export_dir = project_dir.join("exports");
     fs::create_dir_all(&export_dir).map_err(|_| AppError::new("EXPORT_STORAGE_FAILED", "The project's export folder could not be created."))?;
     let output_dir = export_dir.canonicalize().map_err(|_| AppError::new("EXPORT_STORAGE_FAILED", "The project's export folder is unavailable."))?;
+    ensure_render_space(&output_dir, video.duration_seconds)?;
     let cache_dir = output_dir.join(".render-cache").join(&run_id);
     fs::create_dir_all(&cache_dir).map_err(|_| AppError::new("EXPORT_STORAGE_FAILED", "The temporary render workspace could not be created."))?;
     let cache_dir = cache_dir.canonicalize().map_err(|_| AppError::new("EXPORT_STORAGE_FAILED", "The temporary render workspace is unavailable."))?;
@@ -560,9 +604,18 @@ fn render_worker(
         }
         let stdout = child.stdout.take().ok_or_else(|| AppError::new("FFMPEG_PROGRESS_UNAVAILABLE", "The FFmpeg progress stream could not be opened."))?;
         let stderr = child.stderr.take().map(|mut stream| thread::spawn(move || {
-            let mut buffer = Vec::new();
-            let _ = stream.by_ref().take(24 * 1024).read_to_end(&mut buffer);
-            String::from_utf8_lossy(&buffer).to_string()
+            let mut retained = Vec::with_capacity(24 * 1024);
+            let mut scratch = [0_u8; 4096];
+            loop {
+                match stream.read(&mut scratch) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        let remaining = 24 * 1024_usize.saturating_sub(retained.len());
+                        retained.extend_from_slice(&scratch[..count.min(remaining)]);
+                    }
+                }
+            }
+            String::from_utf8_lossy(&retained).to_string()
         }));
         let mut last_progress = 0_u8;
         for line in BufReader::new(stdout).lines() {
@@ -805,6 +858,14 @@ mod tests {
         assert!(value.contains("مرحبا"));
         assert!(value.starts_with('\u{2067}'));
         assert!(value.ends_with('\u{2069}'));
+    }
+
+    #[test]
+    fn export_space_estimate_has_a_fixed_safety_margin_and_scales_with_duration() {
+        let one_second = 1_u64.saturating_mul(1024 * 1024).saturating_add(256 * 1024 * 1024);
+        let ten_seconds = 10_u64.saturating_mul(1024 * 1024).saturating_add(256 * 1024 * 1024);
+        assert_eq!(one_second, 269_484_032);
+        assert_eq!(ten_seconds - one_second, 9 * 1024 * 1024);
     }
 
     #[test]
