@@ -72,7 +72,7 @@ describe("Screenstory desktop application", () => {
     invoke.mockImplementation((command: string) => standard(command));
   });
 
-  it("offers a user-approved system install when a runtime dependency is missing", async () => {
+  it("installs a missing runtime dependency only when the user invokes recording", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const missingReport = {
       dependencies: report.dependencies.map((dependency) => dependency.id === "ffmpeg"
@@ -82,13 +82,20 @@ describe("Screenstory desktop application", () => {
     invoke.mockImplementation((command: string) => {
       if (command === "check_dependencies") return Promise.resolve(missingReport);
       if (command === "install_dependency") return Promise.resolve(report);
+      if (command === "list_projects") return Promise.resolve([project]);
+      if (command === "get_active_project") return Promise.resolve(project);
       return standard(command);
     });
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "Install automatically" }));
+    expect(await screen.findByText("Demo project")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Install automatically" })).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("install_dependency", { dependencyId: "ffmpeg" });
+
+    fireEvent.click(await screen.findByRole("button", { name: /Set up & start recording/ }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_dependency", { dependencyId: "ffmpeg" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("start_recording", { captureSourceId: captureSource.id }));
     expect(confirm).toHaveBeenCalled();
-    expect(await screen.findByText("FFmpeg · recording and video export is installed and ready.")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /Stop & save/ })).toBeTruthy();
     confirm.mockRestore();
   });
 
