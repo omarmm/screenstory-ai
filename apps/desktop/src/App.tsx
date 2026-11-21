@@ -19,6 +19,18 @@ type AnalysisDraft = {
   steps: { id: string; title: string; description: string; startMs: number; endMs: number; confidence: number; evidenceKind: string; evidenceFrameIds: string[] }[];
   zoomSuggestions: { id: string; startMs: number; endMs: number; x: number; y: number; width: number; height: number; targetScale: number; rationale: string; evidenceFrameIds: string[] }[];
 };
+type TimelineStep = {
+  id: string; title: string; description: string; startMs: number; endMs: number;
+  origin: "ai" | "manual"; evidenceFrameIds: string[]; confidence: number | null; evidenceKind: string | null;
+};
+type TimelineDocument = {
+  schemaVersion: number; timelineId: string; recordingId: string; sourceFileName: string;
+  sourceDurationMs: number; sourceAnalysisRunId: string; revision: number;
+  createdAtMs: number; updatedAtMs: number; status: string; language: string;
+  steps: TimelineStep[];
+  zoomSegments: { id: string; startMs: number; endMs: number; x: number; y: number; width: number; height: number; targetScale: number; rationale: string; evidenceFrameIds: string[]; origin: string; approvalStatus: string }[];
+  annotations: unknown[];
+};
 
 function formatDuration(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
@@ -60,6 +72,8 @@ export default function App() {
   const [analysisDraft, setAnalysisDraft] = useState<AnalysisDraft | null>(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [credentialStoreAvailable, setCredentialStoreAvailable] = useState(true);
+  const [timeline, setTimeline] = useState<TimelineDocument | null>(null);
+  const [timelineBusy, setTimelineBusy] = useState(false);
 
   const ffmpeg = dependencies?.dependencies.find((item) => item.id === "ffmpeg");
   const elapsedSeconds = useMemo(() => capture.startedAtMs === null ? 0 : Math.floor((clock - capture.startedAtMs) / 1000), [capture.startedAtMs, clock]);
@@ -137,7 +151,7 @@ export default function App() {
     setBusy(true); setError(null);
     try {
       const opened = await invoke<Project>("open_project", { projectId: project.id });
-      setActiveProject(opened); setActiveAnalysis(null); setAnalysisDraft(null); setNotice("Opened “" + opened.name + "”.");
+      setActiveProject(opened); setActiveAnalysis(null); setAnalysisDraft(null); setTimeline(null); setNotice("Opened “" + opened.name + "”.");
       await refreshProjects();
     } catch (reason) { setError(friendlyError(reason)); }
     finally { setBusy(false); }
@@ -202,6 +216,88 @@ export default function App() {
       setActiveAnalysis(next);
       setNotice("Analysis cancelled. The original recording was not changed.");
     } catch (reason) { setError(friendlyError(reason)); }
+  }
+
+  async function createEditableTimeline() {
+    if (!activeAnalysis || activeAnalysis.status !== "completed") return;
+    setTimelineBusy(true); setError(null);
+    try {
+      const created = await invoke<TimelineDocument>("create_timeline_from_draft", { runId: activeAnalysis.runId });
+      setTimeline(created);
+      setNotice("Editable timeline created at revision " + created.revision + ". The AI draft and original recording remain unchanged.");
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setTimelineBusy(false); }
+  }
+  async function openTimeline(recording: Recording) {
+    setTimelineBusy(true); setError(null);
+    try {
+      const opened = await invoke<TimelineDocument | null>("get_timeline_for_recording", { recordingId: recording.id });
+      if (!opened) {
+        setTimeline(null);
+        setNotice("No editable timeline exists for this recording yet. Complete an AI analysis and choose Create editable timeline.");
+      } else {
+        setTimeline(opened);
+        setNotice("Opened timeline · revision " + opened.revision + ".");
+      }
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setTimelineBusy(false); }
+  }
+  function updateTimelineStep(index: number, patch: Partial<TimelineStep>) {
+    setTimeline((current) => current ? {
+      ...current,
+      steps: current.steps.map((step, stepIndex) => stepIndex === index ? { ...step, ...patch } : step),
+    } : current);
+  }
+  function addTimelineStep() {
+    setTimeline((current) => {
+      if (!current) return current;
+      const lastEnd = current.steps.reduce((latest, step) => Math.max(latest, step.endMs), 0);
+      if (lastEnd >= current.sourceDurationMs) {
+        setError("There is no remaining time after the last step. Shorten a step before adding another.");
+        return current;
+      }
+      const end = Math.min(current.sourceDurationMs, lastEnd + 3000);
+      const id = "manual-" + Date.now();
+      return {
+        ...current,
+        steps: [...current.steps, {
+          id, title: "New tutorial step", description: "Describe what the viewer should do.",
+          startMs: lastEnd, endMs: end, origin: "manual", evidenceFrameIds: [],
+          confidence: null, evidenceKind: null,
+        }],
+      };
+    });
+  }
+  function removeTimelineStep(index: number) {
+    setTimeline((current) => {
+      if (!current || current.steps.length <= 1) {
+        setError("A timeline must contain at least one step.");
+        return current;
+      }
+      return { ...current, steps: current.steps.filter((_, stepIndex) => stepIndex !== index) };
+    });
+  }
+  function sortTimelineSteps() {
+    setTimeline((current) => current ? { ...current, steps: [...current.steps].sort((a, b) => a.startMs - b.startMs) } : current);
+  }
+  async function saveTimeline() {
+    if (!timeline) return;
+    setTimelineBusy(true); setError(null);
+    try {
+      const saved = await invoke<TimelineDocument>("save_timeline", { timeline, expectedRevision: timeline.revision });
+      setTimeline(saved);
+      setNotice("Timeline saved · revision " + saved.revision + ". Previous revisions remain available.");
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setTimelineBusy(false); }
+  }
+  async function reloadTimeline() {
+    if (!timeline) return;
+    setTimelineBusy(true); setError(null);
+    try {
+      const latest = await invoke<TimelineDocument | null>("get_timeline_for_recording", { recordingId: timeline.recordingId });
+      if (latest) { setTimeline(latest); setNotice("Loaded the latest saved timeline revision."); }
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setTimelineBusy(false); }
   }
 
   async function startRecording() {
@@ -286,7 +382,7 @@ export default function App() {
               </div>
               <div className="feature-card"><div className="feature-icon">◉</div><h3>Capture locally</h3><p>Your original recording stays on your machine. No upload is required to record.</p></div>
               <div className="feature-card"><div className="feature-icon">▤</div><h3>Keep work organized</h3><p>Each project keeps its recordings and assets together in a dedicated folder.</p></div>
-              <div className="feature-card muted-feature"><div className="feature-icon">✦</div><h3>AI tutorial analysis</h3><p>Planned next: turn recorded steps into an editable tutorial timeline.</p><span className="coming-label">NOT IN THIS BUILD</span></div>
+              <div className="feature-card"><div className="feature-icon">✦</div><h3>AI tutorial draft</h3><p>Review evidence-linked steps and convert them into a separate editable timeline after explicit cloud consent.</p></div>
             </div>
           ) : (
             <div className="project-view">
@@ -340,10 +436,41 @@ export default function App() {
                   {activeAnalysis.status === "completed" && analysisDraft && <>
                     <div className="draft-summary"><strong>AI draft ready for review</strong><p>{analysisDraft.summary}</p><div className="draft-counts"><span>{analysisDraft.steps.length} tutorial steps</span><span>{analysisDraft.zoomSuggestions.length} zoom suggestions</span></div></div>
                     <div className="draft-step-list">{analysisDraft.steps.map((step, index) => <article className="draft-step" key={step.id}><span className="draft-index">{String(index + 1).padStart(2, "0")}</span><div><strong>{step.title}</strong><p>{step.description}</p><small>{formatDuration(step.startMs / 1000)} – {formatDuration(step.endMs / 1000)} · {step.evidenceFrameIds.length} evidence frames · {step.evidenceKind}</small></div></article>)}</div>
+                    <div className="analysis-actions"><button className="primary-button" onClick={() => void createEditableTimeline()} disabled={timelineBusy || timeline !== null}>Create editable timeline</button><small>Creates a separate versioned timeline. The AI draft and source video are untouched.</small></div>
                     <small>This draft is not approved for rendering and does not overwrite your original recording.</small>
                   </>}
                   {activeAnalysis.status === "failed" && <div className="inline-warning">Analysis failed ({activeAnalysis.errorCode ?? "unknown error"}). Your original recording is unchanged. You can start another run.</div>}
                   {activeAnalysis.status === "cancelled" && <p>Analysis cancelled. Your original recording is unchanged.</p>}
+                </section>
+              )}
+
+              {timeline && (
+                <section className="timeline-editor-card">
+                  <div className="section-heading"><div><span className="eyebrow">VERSIONED TIMELINE</span><h2>Edit tutorial steps</h2><p>{timeline.sourceFileName} · {timeline.steps.length} steps · revision {timeline.revision}</p></div><span className="analysis-status-pill completed">LOCAL DRAFT</span></div>
+                  <div className="timeline-toolbar">
+                    <button className="secondary-button" onClick={() => void reloadTimeline()} disabled={timelineBusy}>Reload latest</button>
+                    <button className="secondary-button" onClick={sortTimelineSteps} disabled={timelineBusy}>Sort by start time</button>
+                    <button className="primary-button" onClick={() => void saveTimeline()} disabled={timelineBusy}>{timelineBusy ? "Saving…" : "Save revision"}</button>
+                  </div>
+                  <div className="timeline-step-list">
+                    {timeline.steps.map((step, index) => (
+                      <article className="timeline-step-card" key={step.id}>
+                        <div className="timeline-step-top"><span className="draft-index">{String(index + 1).padStart(2, "0")}</span><span className={"timeline-origin " + step.origin}>{step.origin === "ai" ? "AI SUGGESTED" : "MANUAL"}</span><button className="text-button danger-text" onClick={() => removeTimelineStep(index)} disabled={timelineBusy || timeline.steps.length <= 1}>Remove</button></div>
+                        <label className="field-label" htmlFor={"timeline-title-" + step.id}>Step title</label>
+                        <input id={"timeline-title-" + step.id} className="timeline-text-input" value={step.title} maxLength={160} onChange={(event) => updateTimelineStep(index, { title: event.target.value })} />
+                        <label className="field-label" htmlFor={"timeline-description-" + step.id}>Description</label>
+                        <textarea id={"timeline-description-" + step.id} className="timeline-textarea" value={step.description} maxLength={1200} onChange={(event) => updateTimelineStep(index, { description: event.target.value })} />
+                        <div className="timeline-time-grid">
+                          <label>Start (ms)<input type="number" min={0} max={timeline.sourceDurationMs} step={100} value={step.startMs} onChange={(event) => updateTimelineStep(index, { startMs: Number(event.target.value) })} /></label>
+                          <label>End (ms)<input type="number" min={0} max={timeline.sourceDurationMs} step={100} value={step.endMs} onChange={(event) => updateTimelineStep(index, { endMs: Number(event.target.value) })} /></label>
+                          <span>{formatDuration(step.startMs / 1000)} – {formatDuration(step.endMs / 1000)}</span>
+                        </div>
+                        <div className="timeline-evidence">{step.origin === "ai" ? (step.evidenceFrameIds.length + " evidence frames · confidence " + (step.confidence ?? 0).toFixed(2)) : "User-authored step · no AI evidence"}</div>
+                      </article>
+                    ))}
+                  </div>
+                  <div className="timeline-footer"><button className="secondary-button" onClick={addTimelineStep} disabled={timelineBusy || timeline.steps.length >= 60}>＋ Add manual step</button><span>Changes are local until you save a new revision.</span></div>
+                  {timeline.zoomSegments.length > 0 && <div className="pending-zoom-note">{timeline.zoomSegments.length} AI zoom suggestions saved as pending. They are not applied or rendered in this milestone.</div>}
                 </section>
               )}
 
@@ -367,7 +494,7 @@ export default function App() {
               <section className="recordings-card"><div className="section-heading"><div><span className="eyebrow">PROJECT LIBRARY</span><h2>Recordings</h2></div><span className="count-pill">{recordings.length}</span></div>
                 {recordings.length === 0 ? <div className="recordings-empty"><span className="empty-video-icon">▹</span><strong>No recordings yet</strong><p>Your saved desktop recordings will appear here.</p></div>
                   : <div className="recording-list">{recordings.map((recording) => <div className="recording-row" key={recording.id}>
-                    <div className="recording-file-icon">MP4</div><div className="recording-details"><strong>{recording.fileName}</strong><span>{formatDate(recording.createdAt)} · {formatDuration(recording.durationSeconds)}</span></div><button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || capture.isRecording || !ffmpeg || ffmpeg.status !== "available" || (activeAnalysis !== null && !["completed", "failed", "cancelled"].includes(activeAnalysis.status))}>Analyze</button><span className="saved-label">SAVED</span>
+                    <div className="recording-file-icon">MP4</div><div className="recording-details"><strong>{recording.fileName}</strong><span>{formatDate(recording.createdAt)} · {formatDuration(recording.durationSeconds)}</span></div><button className="secondary-button compact" onClick={() => void openTimeline(recording)} disabled={timelineBusy}>Open timeline</button><button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || capture.isRecording || !ffmpeg || ffmpeg.status !== "available" || (activeAnalysis !== null && !["completed", "failed", "cancelled"].includes(activeAnalysis.status))}>Analyze</button><span className="saved-label">SAVED</span>
                   </div>)}</div>}
               </section>
             </div>

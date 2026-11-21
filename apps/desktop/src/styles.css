@@ -160,3 +160,27 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .draft-step strong { color:#e9edfa; font-size:11px; }
 .draft-step p { color:#9ba9c2; font-size:10px; line-height:1.5; margin:5px 0; }
 .draft-step small { margin:0; color:#75849f; }
+
+
+.timeline-editor-card { margin-bottom:18px; padding:21px; border-radius:14px; border:1px solid rgba(122,147,232,.23); background:linear-gradient(155deg,rgba(26,38,69,.98),rgba(15,24,44,.98)); }
+.timeline-editor-card h2 { margin:7px 0 4px; font-size:17px; }
+.timeline-editor-card .section-heading p { color:#8190ae; font-size:10px; margin:5px 0 0; }
+.timeline-toolbar { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; margin:16px 0; }
+.timeline-step-list { display:grid; gap:10px; }
+.timeline-step-card { padding:15px; border:1px solid rgba(154,174,229,.13); border-radius:10px; background:rgba(8,16,33,.62); }
+.timeline-step-top { display:flex; align-items:center; gap:10px; }
+.timeline-step-top .draft-index { font-size:11px; }
+.timeline-origin { font-size:8px; font-weight:800; letter-spacing:.08em; color:#adc0ff; background:rgba(108,131,235,.14); padding:4px 7px; border-radius:10px; }
+.timeline-origin.manual { color:#91dec1; background:rgba(57,170,130,.13); }
+.timeline-step-top .danger-text { margin-left:auto; }
+.timeline-text-input,.timeline-textarea { display:block; width:100%; margin-top:6px; padding:9px 11px; border:1px solid rgba(151,171,225,.17); border-radius:7px; background:#0b1428; color:#edf2ff; font:inherit; font-size:11px; outline:none; }
+.timeline-textarea { min-height:54px; resize:vertical; line-height:1.5; }
+.timeline-time-grid { display:flex; align-items:end; flex-wrap:wrap; gap:10px; margin-top:12px; }
+.timeline-time-grid label { display:flex; flex-direction:column; gap:5px; color:#8796b4; font-size:9px; }
+.timeline-time-grid input { width:112px; padding:8px; color:#edf2ff; background:#0b1428; border:1px solid rgba(151,171,225,.17); border-radius:6px; font:inherit; font-size:10px; }
+.timeline-time-grid>span { color:#9eadd0; font-size:9px; padding:8px 0; }
+.timeline-evidence { margin-top:10px; color:#7586a8; font-size:9px; }
+.timeline-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-top:14px; }
+.timeline-footer>span { color:#7d8ba8; font-size:9px; }
+.pending-zoom-note { margin-top:14px; padding:10px; background:rgba(104,128,222,.08); color:#9eafd9; border-radius:7px; font-size:10px; line-height:1.5; }
+.secondary-button.compact { font-size:9px; padding:7px 9px; }
