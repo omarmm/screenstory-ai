@@ -2,7 +2,7 @@
 
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
-**Status:** Production desktop stack accepted; M1 foundation specification is the next gate.
+**Status:** Production desktop stack accepted; SPEC-017 drafted and awaiting review.
 
 ## Approved product scope
 
@@ -42,13 +42,13 @@ The Python/Tkinter recorder remains a prototype and behavioral reference until t
 
 **M1 — Desktop Foundation.**
 
-The next step is to approve a detailed foundation specification covering:
-1. Tauri v2 project structure and build prerequisites.
-2. React presentation and Rust application-core boundaries.
-3. Narrow Tauri command contracts and capability policy.
-4. Minimal application shell and project dashboard.
-5. Project workspace bootstrap and persistence boundary.
-6. Build, test, and verification workflow.
+Draft specification: SPEC-017 — Tauri Desktop Foundation. It covers the app shell, Rust command boundary, least-privilege capabilities, project workspace boundary, build prerequisites, and quality gates. It is not yet approved; no implementation task is Ready.
+
+Next gate:
+1. Review and approve SPEC-017.
+2. Verify Tauri v2 Linux prerequisites, especially WebKitGTK 4.1 compatibility on the actual Linux Mint target.
+3. Resolve the remaining M1 open decisions and define task handoffs.
+4. Scaffold Tauri v2 + React + TypeScript + Rust only after approval and environment readiness.
 
 No production capture port is authorized merely by creating the shell. Capture remains governed by SPEC-002 and must be integrated behind the unified adapter contract.
 
@@ -60,15 +60,6 @@ No production capture port is authorized merely by creating the shell. Capture r
 - The prototype includes refresh/error handling for stale or closed window selections and a larger default UI. These changes are on the prototype branch and still require local confirmation after pull.
 - Wayland: XDG Desktop Portal ScreenCast + PipeWire remains the intended direction; validation is pending.
 - The prototype is not production-ready and does not prove cross-distribution compatibility.
-
-## Next actions
-
-1. Finalize and approve the M1 desktop foundation specification.
-2. Verify Tauri v2 Linux prerequisites, especially WebKitGTK 4.1 compatibility on the actual target OS.
-3. Scaffold Tauri v2 + React + TypeScript + Rust after the foundation specification is approved.
-4. Establish the project workspace and narrow native command boundary.
-5. Keep capture integration behind the platform adapter interface; production capture work remains governed by SPEC-002.
-6. Continue frame extraction, timeline schema, AI contract, and privacy specifications in their dependency order.
 
 ## Active implementation task
 
