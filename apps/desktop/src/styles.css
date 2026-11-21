@@ -401,3 +401,32 @@ option:checked, option:hover {
 .dependency-center .dependency-warning:first-of-type {
   margin-top: 8px;
 }
+
+.dependency-install-progress {
+  margin: 0 0 18px;
+  padding: 13px 15px;
+  border: 1px solid rgba(111,137,235,.27);
+  border-radius: 10px;
+  background: rgba(17,29,55,.92);
+}
+.dependency-install-progress strong {
+  color: #dce5ff;
+  font-size: 11px;
+}
+.dependency-install-progress p {
+  margin: 7px 0;
+  color: #9eabc5;
+  font-size: 10px;
+}
+.dependency-install-progress pre {
+  max-height: 190px;
+  overflow: auto;
+  margin: 9px 0 0;
+  padding: 10px;
+  border-radius: 7px;
+  color: #a9e4c8;
+  background: #070d19;
+  font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
