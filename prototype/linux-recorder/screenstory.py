@@ -343,6 +343,8 @@ class ScreenstoryRecorder:
             return
         output = self.output_file
         return_code = process.returncode
+        if self.capture_process is not None and self.capture_process.returncode not in (None, 0):
+            return_code = self.capture_process.returncode
         self.cleanup_process()
         self.record_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
