@@ -262,7 +262,8 @@ class ScreenstoryRecorder:
                 detail = (result.stderr or result.stdout or "").strip()
                 self.root.after(0, lambda: self.package_install_finished(result.returncode, detail))
             except Exception as exc:
-                error_text = str(exc)\n                self.root.after(0, lambda message=error_text: self.package_install_finished(1, message))
+                error_text = str(exc)
+                self.root.after(0, lambda message=error_text: self.package_install_finished(1, message))
 
         threading.Thread(target=worker, daemon=True).start()
 
