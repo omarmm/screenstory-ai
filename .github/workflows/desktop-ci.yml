@@ -65,6 +65,7 @@ jobs:
             curl wget file \
             libxdo-dev \
             libssl-dev \
+            libdbus-1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev
       - name: Rust format check

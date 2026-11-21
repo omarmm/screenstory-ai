@@ -1,6 +1,6 @@
 [package]
 name = "screenstory"
-version = "0.2.1"
+version = "0.3.0"
 description = "Turn screen recordings into clear tutorials."
 authors = ["Screenstory Contributors"]
 edition = "2021"
@@ -13,7 +13,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64 = "0.22"
+keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tauri = { version = "2", features = [] }
 thiserror = "2"
