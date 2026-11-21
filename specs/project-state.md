@@ -2,8 +2,8 @@
 
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
-**Current milestone:** M6 — video preview and MP4 tutorial export  
-**Status:** M1–M5 implementation is committed. The 0.4.0 package build is in CI. M6 SPEC-022 is approved. M6-T301 render-plan/filter-generation foundation and the Linux renderer capability proof are being implemented; preview/export execution is not yet complete. Target-device smoke testing and a real Gemini request remain pending. This is not a completed MVP release.
+**Current milestone:** M8 — user-consented runtime dependency installation and release hardening  
+**Status:** The latest packaged version verified on the target device is 0.5.2. Source on `prototype/tauri-foundation` is version 0.5.3 and includes the later workspace, Gemini diagnostics, sampling, and partial SPEC-024 runtime-dependency work. SPEC-024 implementation is not yet verified: no tests, formatting, Clippy, local build, or CI run has been performed for the latest commits. The latest source is not a release artifact. Target-device smoke tests and a real Gemini request remain pending. This is not a completed MVP release.
 
 ## Product scope
 
@@ -142,7 +142,7 @@ Do not mark SPEC-024 complete until the full acceptance criteria pass on support
 
 1. M6 — complete the renderer proof, composited preview, deterministic MP4 export, audio preservation and output verification.
 2. M7 — selected-window recording and Wayland XDG portal/PipeWire capture adapters.
-3. M8 — complete the user-consented FFmpeg dependency installer with real progress, Linux Mint compatibility matrix, recovery/security/licensing/packaging/release hardening.
+3. M8 — verify and complete SPEC-024 on supported Linux Mint versions: user-consented runtime dependency installation, real package-manager progress, package-manager failure recovery, security, packaging, and release hardening.
 4. Target-device validation on Linux Mint for capture, persisted projects/timelines, Gemini, RTL shaping, and export.
 
 ## Deferred
