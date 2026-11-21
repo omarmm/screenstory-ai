@@ -356,7 +356,9 @@ fn ffmpeg_status() -> DependencyStatus {
 }
 
 fn ffmpeg_export_status() -> DependencyStatus {
-    if !command_succeeds("ffmpeg", &["-version"]) {
+    if !command_succeeds("ffmpeg", &["-version"])
+        || !command_succeeds("ffprobe", &["-version"])
+    {
         return DependencyStatus {
             id: "ffmpeg-export",
             feature: "MP4 export · H.264 and AAC encoders",
