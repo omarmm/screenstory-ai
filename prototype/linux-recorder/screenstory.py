@@ -240,10 +240,10 @@ class ScreenstoryRecorder:
         package_list = " ".join(packages)
         approved = messagebox.askyesno(
             "Screenstory needs additional components",
-            "The following packages are missing:\\n\\n"
-            + "\\n".join(f"• {name}" for name in packages)
-            + "\\n\\nScreenstory will ask Linux for administrator approval, "
-              "then download and install these packages. Nothing will be installed unless you approve.\\n\\nContinue?",
+            "The following packages are missing:\n\n"
+            + "\n".join(f"• {name}" for name in packages)
+            + "\n\nScreenstory will ask Linux for administrator approval, "
+              "then download and install these packages. Nothing will be installed unless you approve.\n\nContinue?",
         )
         if not approved:
             self.status.set("Installation cancelled · no system changes made")
@@ -275,7 +275,7 @@ class ScreenstoryRecorder:
             self.status.set("Dependency installation was not completed")
             messagebox.showerror(
                 "Installation not completed",
-                "No recording was started. You can retry when ready.\\n\\n"
+                "No recording was started. You can retry when ready.\n\n"
                 + (detail[-2500:] if detail else "Administrator approval was denied or package installation failed."),
             )
             self.record_button.configure(state="normal")
