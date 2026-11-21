@@ -48,8 +48,8 @@ class ScreenstoryRecorder:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Screenstory")
-        self.root.geometry("560x360")
-        self.root.minsize(500, 330)
+        self.root.geometry("680x560")
+        self.root.minsize(620, 520)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.process: subprocess.Popen | None = None
@@ -188,9 +188,15 @@ class ScreenstoryRecorder:
             self.window_choices[label] = (wid, int(width), int(height))
             labels.append(label)
         self.window_combo["values"] = labels
-        if labels and self.selected_window.get() not in self.window_choices:
-            self.selected_window.set(labels[0])
-        self.window_hint.configure(text=f"{len(labels)} windows found")
+        if self.selected_window.get() not in self.window_choices:
+            self.selected_window.set(labels[0] if labels and not self.selected_window.get() else "")
+        if self.selected_window.get():
+            hint = f"{len(labels)} windows found"
+        elif labels:
+            hint = f"{len(labels)} windows found · choose a window"
+        else:
+            hint = "No eligible windows found"
+        self.window_hint.configure(text=hint)
 
     def build_capture_helper(self) -> Path:
         source = Path(__file__).with_name("xcomposite_capture.c")
@@ -319,9 +325,17 @@ class ScreenstoryRecorder:
             width, height = screen_size()
             window = None
             if self.source_mode.get() == "window":
-                window = self.window_choices.get(self.selected_window.get())
+                # Refresh the live X11 window list before launching FFmpeg.
+                # A previously selected window may have been closed since the last refresh.
+                previous_selection = self.selected_window.get()
+                self.refresh_windows()
+                window = self.window_choices.get(previous_selection)
                 if not window:
-                    raise RuntimeError("Select a window first, then click Refresh windows if needed.")
+                    self.selected_window.set("")
+                    raise RuntimeError(
+                        "The selected window is no longer available (it may have been closed).\\n\\n"
+                        "Choose an open window from the list and try again."
+                    )
                 width, height = window[1], window[2]
             output_dir = Path(self.output_dir.get()).expanduser()
             output_dir.mkdir(parents=True, exist_ok=True)
