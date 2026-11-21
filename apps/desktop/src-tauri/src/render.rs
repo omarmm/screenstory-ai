@@ -110,7 +110,7 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
-fn ensure_render_table(project_dir: &Path) -> Result<(), AppError> {
+pub(super) fn ensure_render_table(project_dir: &Path) -> Result<(), AppError> {
     db_connection(project_dir)?.execute_batch(
         "CREATE TABLE IF NOT EXISTS render_runs (
             id TEXT PRIMARY KEY,
