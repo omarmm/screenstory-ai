@@ -66,6 +66,28 @@ describe("Screenstory desktop application", () => {
     invoke.mockImplementation((command: string) => standard(command));
   });
 
+  it("offers a user-approved system install when a runtime dependency is missing", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const missingReport = {
+      dependencies: [{
+        id: "ffmpeg", feature: "FFmpeg · recording and video export",
+        status: "missing", version: null, impact: "Recording is unavailable.",
+        canInstall: true, remediation: "Screenstory can install FFmpeg."
+      }]
+    };
+    invoke.mockImplementation((command: string) => {
+      if (command === "check_dependencies") return Promise.resolve(missingReport);
+      if (command === "install_dependency") return Promise.resolve(report);
+      return standard(command);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Install automatically" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_dependency", { dependencyId: "ffmpeg" }));
+    expect(confirm).toHaveBeenCalled();
+    expect(await screen.findByText("FFmpeg · recording and video export is installed and ready.")).toBeTruthy();
+    confirm.mockRestore();
+  });
+
   it("loads the local workspace and offers project creation", async () => {
     render(<App />);
     expect(await screen.findByText("Create a clear story.")).toBeTruthy();
