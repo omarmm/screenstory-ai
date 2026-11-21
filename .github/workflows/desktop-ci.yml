@@ -78,6 +78,12 @@ jobs:
             libdbus-1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: pnpm install --no-frozen-lockfile
+      - name: Generate Tauri application icons
+        working-directory: apps/desktop
+        run: pnpm tauri:icons
       - name: Apply and commit Rust formatting
         run: |
           cargo fmt --all
@@ -93,9 +99,6 @@ jobs:
         run: cargo test
       - name: Rust lint
         run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Install frontend dependencies
-        working-directory: apps/desktop
-        run: pnpm install --no-frozen-lockfile
       - name: Build Debian package
         working-directory: apps/desktop
         run: pnpm tauri build --bundles deb
