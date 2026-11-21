@@ -399,12 +399,18 @@ class ScreenstoryRecorder:
             return
         self.stop_button.configure(state="disabled")
         self.status.set("Finishing MP4…")
-        try:
-            if process.stdin:
-                process.stdin.write("q\n")
-                process.stdin.flush()
-        except (BrokenPipeError, OSError):
-            pass
+        # Window capture uses FFmpeg stdin for raw frames, not commands.
+        # Stop the producer first so EOF lets FFmpeg finalize the MP4.
+        if self.capture_process is not None:
+            if self.capture_process.poll() is None:
+                self.capture_process.terminate()
+        else:
+            try:
+                if process.stdin:
+                    process.stdin.write("q\n")
+                    process.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
         threading.Thread(target=self.wait_for_encoder, daemon=True).start()
 
     def wait_for_encoder(self) -> None:
@@ -415,7 +421,11 @@ class ScreenstoryRecorder:
             except subprocess.TimeoutExpired:
                 process.terminate()
                 process.wait(timeout=5)
-        self.root.after(0, self.finish_recording)
+        try:
+            if self.root.winfo_exists():
+                self.root.after(0, self.finish_recording)
+        except tk.TclError:
+            pass
 
     def cleanup_process(self) -> None:
         if self.capture_process is not None:
@@ -433,6 +443,11 @@ class ScreenstoryRecorder:
         # Make finalization idempotent so the user gets one result dialog.
         process = self.process
         if process is None:
+            return
+        try:
+            if not self.root.winfo_exists():
+                return
+        except tk.TclError:
             return
         output = self.output_file
         return_code = process.returncode
