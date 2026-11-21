@@ -21,7 +21,12 @@ const timeline = {
     startMs: 0, endMs: 1000, origin: "ai", evidenceFrameIds: ["frame-000"],
     confidence: 0.9, evidenceKind: "observed",
   }],
-  zoomSegments: [], annotations: [],
+  zoomSegments: [{
+    id: "zoom-1", startMs: 1000, endMs: 2500, x: 0.2, y: 0.2, width: 0.4, height: 0.4,
+    targetScale: 1.5, rationale: "Focus the settings button.", evidenceFrameIds: ["frame-000"],
+    origin: "ai", approvalStatus: "pending", transitionDurationMs: 250,
+  }],
+  annotations: [],
 };
 
 function standard(command: string) {
@@ -106,6 +111,30 @@ describe("Screenstory desktop application", () => {
     expect(await screen.findByText(/Timeline saved · revision 2/)).toBeTruthy();
   });
 
+  it("accepts a zoom suggestion and saves a bilingual annotation", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_projects") return Promise.resolve([project]);
+      if (command === "get_active_project") return Promise.resolve(project);
+      if (command === "list_recordings") return Promise.resolve([recording]);
+      if (command === "get_timeline_for_recording") return Promise.resolve(timeline);
+      if (command === "save_timeline") return Promise.resolve({ ...timeline, revision: 2 });
+      return standard(command);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open timeline" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Accept zoom" }));
+    fireEvent.click(screen.getByRole("button", { name: /Add caption/ }));
+    fireEvent.change(screen.getByLabelText("Caption text"), { target: { value: "اضغط على الإعدادات" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_timeline", expect.objectContaining({
+      expectedRevision: 1,
+      timeline: expect.objectContaining({
+        schemaVersion: 2,
+        zoomSegments: [expect.objectContaining({ approvalStatus: "accepted", transitionDurationMs: 250 })],
+        annotations: [expect.objectContaining({ text: "اضغط على الإعدادات", language: "mixed", direction: "auto", origin: "manual" })],
+      }),
+    })));
+  });
   it("surfaces a native startup/storage error without crashing", async () => {
     invoke.mockImplementation((command: string) => command === "get_app_info"
       ? Promise.resolve(appInfo)
