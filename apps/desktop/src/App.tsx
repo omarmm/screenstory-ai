@@ -163,8 +163,11 @@ export default function App() {
   }
 
   async function ensureRuntimeDependency(dependencyId: string): Promise<boolean> {
-    const report = dependencies ?? await invoke<DependencyReport>("check_dependencies").catch(() => null);
-    if (report && !dependencies) setDependencies(report);
+    const report = await invoke<DependencyReport>("check_dependencies").catch((reason) => {
+      setError(friendlyError(reason));
+      return null;
+    });
+    if (report) setDependencies(report);
     const dependency = report?.dependencies.find((item) => item.id === dependencyId);
     if (!dependency) {
       setError("Screenstory could not verify a required runtime component. Recheck system dependencies and try again.");
@@ -364,6 +367,7 @@ export default function App() {
   async function startAnalysis(recording: Recording) {
     setAnalysisBusy(true); setError(null); setNotice(null); setAnalysisDraft(null);
     try {
+      if (!await ensureRuntimeDependency("ffmpeg")) return;
       const started = await invoke<{ runId: string; recordingId: string; fileName: string }>("start_analysis", {
         recordingId: recording.id,
         workflowDescription,
