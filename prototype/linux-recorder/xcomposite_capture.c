@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
     unsigned char *out = malloc(out_bytes);
     if (!out) { fprintf(stderr, "out of memory\n"); XCloseDisplay(d); return 6; }
 
-    XSelectInput(d, win, StructureNotifyMask);
+    fprintf(stderr, "XComposite capture started: window=0x%lx source=%dx%d output=%dx%d\\n",\n            win, attr.width, attr.height, out_w, out_h);\n    XSelectInput(d, win, StructureNotifyMask);
     x_error = 0;
     XCompositeRedirectWindow(d, win, CompositeRedirectAutomatic);
     XSync(d, False);
