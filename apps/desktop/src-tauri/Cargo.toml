@@ -1,6 +1,6 @@
 [package]
 name = "screenstory"
-version = "0.5.0"
+version = "0.5.1"
 description = "Turn screen recordings into clear tutorials."
 authors = ["Screenstory Contributors"]
 edition = "2021"
