@@ -34,7 +34,8 @@ pub struct TimelineDocument {
     pub language: String,
     pub steps: Vec<TimelineStep>,
     pub zoom_segments: Vec<TimelineZoomSegment>,
-    pub annotations: Vec<Value>,
+    #[serde(default)]
+    pub annotations: Vec<TimelineAnnotation>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -66,6 +67,29 @@ pub struct TimelineZoomSegment {
     pub evidence_frame_ids: Vec<String>,
     pub origin: String,
     pub approval_status: String,
+    #[serde(default = "default_transition_duration_ms")]
+    pub transition_duration_ms: u64,
+}
+
+fn default_transition_duration_ms() -> u64 { 250 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineAnnotation {
+    pub id: String,
+    pub text: String,
+    pub language: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub x: f64,
+    pub y: f64,
+    pub max_width: f64,
+    pub font_size: u32,
+    pub foreground: String,
+    pub background: String,
+    pub alignment: String,
+    pub direction: String,
+    pub origin: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,7 +208,7 @@ fn validate_timeline(
     timeline: &TimelineDocument,
     manifest: &SourceManifest,
 ) -> Result<(), AppError> {
-    if timeline.schema_version != 1 {
+    if timeline.schema_version != 2 {
         return Err(AppError::new(
             "TIMELINE_SCHEMA_UNSUPPORTED",
             "This timeline uses an unsupported schema version.",
@@ -297,6 +321,7 @@ fn validate_timeline(
             || !(1.0..=3.0).contains(&zoom.target_scale)
             || zoom.rationale.trim().is_empty()
             || !["ai", "manual"].contains(&zoom.origin.as_str())
+            || zoom.transition_duration_ms > 1500
             || !["pending", "accepted", "rejected"].contains(&zoom.approval_status.as_str())
             || (zoom.origin == "ai"
                 && (zoom.evidence_frame_ids.is_empty()
@@ -313,13 +338,78 @@ fn validate_timeline(
         }
     }
 
-    if !timeline.annotations.is_empty() {
+    let mut active_zooms = timeline.zoom_segments.iter()
+        .filter(|zoom| zoom.origin == "manual" || zoom.approval_status == "accepted")
+        .collect::<Vec<_>>();
+    active_zooms.sort_by_key(|zoom| zoom.start_ms);
+    if active_zooms.windows(2).any(|pair| pair[0].end_ms > pair[1].start_ms) {
         return Err(AppError::new(
-            "TIMELINE_ANNOTATIONS_NOT_SUPPORTED",
-            "Text annotations are added in the next editing milestone.",
+            "TIMELINE_ZOOM_OVERLAP",
+            "Accepted zoom segments cannot overlap. Adjust the active zoom time ranges before saving.",
         ));
     }
+
+    let mut annotation_ids = HashSet::new();
+    for annotation in &timeline.annotations {
+        let valid_color = |color: &str| {
+            (color.len() == 7 || color.len() == 9)
+                && color.starts_with('#')
+                && color[1..].chars().all(|character| character.is_ascii_hexdigit())
+        };
+        if annotation.id.trim().is_empty()
+            || annotation.id.len() > 128
+            || !annotation_ids.insert(annotation.id.as_str())
+            || annotation.text.trim().is_empty()
+            || annotation.text.chars().count() > 500
+            || annotation.text.chars().any(|character| character.is_control() && character != '\\n' && character != '\\t')
+            || !["ar", "en", "mixed"].contains(&annotation.language.as_str())
+            || annotation.start_ms >= annotation.end_ms
+            || annotation.end_ms > timeline.source_duration_ms
+            || !annotation.x.is_finite()
+            || !annotation.y.is_finite()
+            || !annotation.max_width.is_finite()
+            || annotation.x < 0.0
+            || annotation.y < 0.0
+            || annotation.max_width <= 0.0
+            || annotation.x + annotation.max_width > 1.0
+            || annotation.y >= 1.0
+            || !(12..=72).contains(&annotation.font_size)
+            || !valid_color(&annotation.foreground)
+            || !valid_color(&annotation.background)
+            || !["left", "center", "right"].contains(&annotation.alignment.as_str())
+            || !["rtl", "ltr", "auto"].contains(&annotation.direction.as_str())
+            || annotation.origin != "manual"
+        {
+            return Err(AppError::new(
+                "TIMELINE_ANNOTATION_INVALID",
+                "A text annotation contains invalid content, language, timing, position, font, color, or direction.",
+            ));
+        }
+    }
     Ok(())
+}
+
+fn migrate_v1_timeline(value: &mut Value) -> Result<bool, AppError> {
+    let version = value.get("schemaVersion").and_then(Value::as_u64)
+        .ok_or_else(|| AppError::new("TIMELINE_SCHEMA_UNSUPPORTED", "The timeline schema version is missing or invalid."))?;
+    if version == 2 {
+        return Ok(false);
+    }
+    if version != 1 {
+        return Err(AppError::new("TIMELINE_SCHEMA_UNSUPPORTED", "This timeline uses an unsupported schema version."));
+    }
+    value["schemaVersion"] = Value::from(2);
+    if let Some(zooms) = value.get_mut("zoomSegments").and_then(Value::as_array_mut) {
+        for zoom in zooms {
+            if zoom.get("transitionDurationMs").is_none() {
+                zoom["transitionDurationMs"] = Value::from(250);
+            }
+        }
+    }
+    if value.get("annotations").is_none() {
+        value["annotations"] = Value::Array(Vec::new());
+    }
+    Ok(true)
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
@@ -429,7 +519,7 @@ pub fn create_timeline_from_draft(
     let created_at_ms = now_ms();
     let timeline_id = format!("t{}-{}", created_at_ms, std::process::id());
     let timeline = TimelineDocument {
-        schema_version: 1,
+        schema_version: 2,
         timeline_id: timeline_id.clone(),
         recording_id: recording_id.clone(),
         source_file_name: source_file_name.clone(),
@@ -464,6 +554,7 @@ pub fn create_timeline_from_draft(
             evidence_frame_ids: zoom.evidence_frame_ids,
             origin: "ai".to_string(),
             approval_status: "pending".to_string(),
+            transition_duration_ms: 250,
         }).collect(),
         annotations: Vec::new(),
     };
@@ -483,7 +574,7 @@ pub fn create_timeline_from_draft(
     atomic_write(&snapshot_path, &bytes)?;
     connection.execute(
         "INSERT INTO timelines (timeline_id, recording_id, source_analysis_run_id, schema_version, current_revision, current_snapshot, created_at_ms, updated_at_ms)
-         VALUES (?1, ?2, ?3, 1, 1, ?4, ?5, ?5)",
+         VALUES (?1, ?2, ?3, 2, 1, ?4, ?5, ?5)",
         params![timeline_id, recording_id, run_id, relative_snapshot, created_at_ms as i64],
     ).map_err(|_| AppError::new("TIMELINE_DATABASE_ERROR", "The timeline snapshot was saved, but the project index could not be updated."))?;
     Ok(timeline)
@@ -527,9 +618,33 @@ pub fn get_timeline_for_recording(
     if !snapshot.starts_with(&timeline_dir) {
         return Err(AppError::new("TIMELINE_PATH_INVALID", "The current timeline snapshot is outside its managed folder."));
     }
-    let timeline: TimelineDocument = serde_json::from_slice(&fs::read(snapshot).map_err(|_| AppError::new("TIMELINE_NOT_FOUND", "The current timeline snapshot could not be read."))?)
+    let raw = fs::read(&snapshot).map_err(|_| AppError::new("TIMELINE_NOT_FOUND", "The current timeline snapshot could not be read."))?;
+    let mut value: Value = serde_json::from_slice(&raw)
+        .map_err(|_| AppError::new("TIMELINE_SNAPSHOT_INVALID", "The current timeline snapshot is invalid."))?;
+    let migrated = migrate_v1_timeline(&mut value)?;
+    let mut timeline: TimelineDocument = serde_json::from_value(value)
         .map_err(|_| AppError::new("TIMELINE_SNAPSHOT_INVALID", "The current timeline snapshot is invalid."))?;
     let (_, manifest) = source_manifest(&project_dir, &run_id)?;
+    if migrated {
+        timeline.revision = revision as u64 + 1;
+        timeline.updated_at_ms = now_ms();
+        let next_name = format!("revision-{}.json", timeline.revision);
+        let next_relative = format!("{}/{}", timeline_id, next_name);
+        let next_path = timeline_dir.join(next_name);
+        let bytes = serde_json::to_vec_pretty(&timeline)
+            .map_err(|_| AppError::new("TIMELINE_SERIALIZATION_FAILED", "The migrated timeline could not be serialized."))?;
+        validate_timeline(&timeline, &manifest)?;
+        atomic_write(&next_path, &bytes)?;
+        let changed = connection.execute(
+            "UPDATE timelines SET schema_version=2, current_revision=?1, current_snapshot=?2, updated_at_ms=?3
+             WHERE timeline_id=?4 AND current_revision=?5",
+            params![timeline.revision as i64, next_relative, timeline.updated_at_ms as i64, timeline_id, revision],
+        ).map_err(|_| AppError::new("TIMELINE_DATABASE_ERROR", "The migrated timeline index could not be updated."))?;
+        if changed != 1 {
+            let _ = fs::remove_file(next_path);
+            return Err(AppError::new("TIMELINE_REVISION_CONFLICT", "The timeline changed while its schema was being upgraded. Reload it."));
+        }
+    }
     validate_timeline(&timeline, &manifest)?;
     if timeline.timeline_id != timeline_id || timeline.revision != revision as u64 || timeline.recording_id != recording_id {
         return Err(AppError::new("TIMELINE_INDEX_MISMATCH", "The current timeline snapshot does not match the project index."));
@@ -608,7 +723,7 @@ pub fn save_timeline(
     })?;
     atomic_write(&next_path, &bytes)?;
     let updated = connection.execute(
-        "UPDATE timelines SET current_revision=?1, current_snapshot=?2, updated_at_ms=?3
+        "UPDATE timelines SET schema_version=2, current_revision=?1, current_snapshot=?2, updated_at_ms=?3
          WHERE timeline_id=?4 AND current_revision=?5",
         params![timeline.revision as i64, next_relative, timeline.updated_at_ms as i64, timeline.timeline_id, expected_revision as i64],
     ).map_err(|_| AppError::new("TIMELINE_DATABASE_ERROR", "The new timeline revision was written, but the project index could not be updated."))?;
@@ -640,7 +755,7 @@ mod tests {
 
     fn example_timeline() -> TimelineDocument {
         TimelineDocument {
-            schema_version: 1,
+            schema_version: 2,
             timeline_id: "t12345-77".to_string(),
             recording_id: "capture.mp4".to_string(),
             source_file_name: "capture.mp4".to_string(),
@@ -665,6 +780,103 @@ mod tests {
             zoom_segments: vec![],
             annotations: vec![],
         }
+    }
+
+    #[test]
+    fn annotation_validation_accepts_arabic_rtl_text() {
+        let mut timeline = example_timeline();
+        timeline.annotations.push(TimelineAnnotation {
+            id: "annotation-1".to_string(),
+            text: "اضغط على الإعدادات".to_string(),
+            language: "ar".to_string(),
+            start_ms: 1000,
+            end_ms: 3000,
+            x: 0.08,
+            y: 0.08,
+            max_width: 0.7,
+            font_size: 26,
+            foreground: "#FFFFFF".to_string(),
+            background: "#000000CC".to_string(),
+            alignment: "right".to_string(),
+            direction: "rtl".to_string(),
+            origin: "manual".to_string(),
+        });
+        assert!(validate_timeline(&timeline, &example_manifest()).is_ok());
+    }
+
+    #[test]
+    fn rejects_overlapping_accepted_zoom_segments_but_keeps_pending_suggestions() {
+        let mut timeline = example_timeline();
+        let zoom = TimelineZoomSegment {
+            id: "zoom-1".to_string(),
+            start_ms: 1000,
+            end_ms: 3000,
+            x: 0.2,
+            y: 0.2,
+            width: 0.4,
+            height: 0.4,
+            target_scale: 1.5,
+            rationale: "Emphasize the control.".to_string(),
+            evidence_frame_ids: vec!["frame-000".to_string()],
+            origin: "ai".to_string(),
+            approval_status: "accepted".to_string(),
+            transition_duration_ms: 250,
+        };
+        timeline.zoom_segments.push(zoom.clone());
+        let mut overlapping = zoom;
+        overlapping.id = "zoom-2".to_string();
+        overlapping.start_ms = 2500;
+        overlapping.end_ms = 4000;
+        timeline.zoom_segments.push(overlapping.clone());
+        assert_eq!(
+            validate_timeline(&timeline, &example_manifest()).unwrap_err().code,
+            "TIMELINE_ZOOM_OVERLAP"
+        );
+        timeline.zoom_segments[0].approval_status = "pending".to_string();
+        timeline.zoom_segments[1].approval_status = "pending".to_string();
+        assert!(validate_timeline(&timeline, &example_manifest()).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_annotation_coordinates_and_control_characters() {
+        let mut timeline = example_timeline();
+        timeline.annotations.push(TimelineAnnotation {
+            id: "annotation-1".to_string(),
+            text: "invalid".to_string(),
+            language: "en".to_string(),
+            start_ms: 0,
+            end_ms: 500,
+            x: 0.9,
+            y: 0.1,
+            max_width: 0.3,
+            font_size: 18,
+            foreground: "#FFFFFF".to_string(),
+            background: "#000000".to_string(),
+            alignment: "left".to_string(),
+            direction: "ltr".to_string(),
+            origin: "manual".to_string(),
+        });
+        assert_eq!(
+            validate_timeline(&timeline, &example_manifest()).unwrap_err().code,
+            "TIMELINE_ANNOTATION_INVALID"
+        );
+    }
+
+    #[test]
+    fn migrate_v1_timeline_adds_transition_defaults_and_annotations() {
+        let mut value = serde_json::json!({
+            "schemaVersion": 1,
+            "zoomSegments": [{
+                "id":"zoom-1", "startMs":0, "endMs":1000, "x":0.2, "y":0.2,
+                "width":0.4, "height":0.4, "targetScale":1.5, "rationale":"Focus",
+                "evidenceFrameIds":["frame-000"], "origin":"ai", "approvalStatus":"pending"
+            }]
+        });
+        let changed = migrate_v1_timeline(&mut value).unwrap();
+        assert!(changed);
+        assert_eq!(value["schemaVersion"], 2);
+        assert_eq!(value["zoomSegments"][0]["transitionDurationMs"], 250);
+        assert_eq!(value["annotations"], serde_json::json!([]));
     }
 
     #[test]
