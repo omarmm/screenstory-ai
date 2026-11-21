@@ -394,7 +394,7 @@ class ScreenstoryRecorder:
         self.status.set("Finishing MP4…")
         try:
             if process.stdin:
-                process.stdin.write("q\\n")
+                process.stdin.write("q\n")
                 process.stdin.flush()
         except (BrokenPipeError, OSError):
             pass
