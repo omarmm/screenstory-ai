@@ -18,6 +18,11 @@ from tkinter import filedialog, messagebox, ttk
 
 
 APP_NAME = "Screenstory"
+BASE_PACKAGES = ["ffmpeg"]
+WINDOW_PACKAGES = [
+    "wmctrl", "build-essential", "pkg-config",
+    "libx11-dev", "libxcomposite-dev",
+]
 DEFAULT_OUTPUT = Path.home() / "Videos" / "Screenstory"
 
 
@@ -191,10 +196,8 @@ class ScreenstoryRecorder:
 
     def check_readiness(self) -> None:
         problems = []
-        if not shutil.which("ffmpeg"):
-            problems.append("FFmpeg was not found.")
-        if self.source_mode.get() == "window" and not shutil.which("wmctrl"):
-            problems.append("Install wmctrl to select a window.")
+        # Missing packages are handled at the point of use with an explicit
+        # installation-consent dialog; do not disable the action or print sudo commands.
         if os.environ.get("XDG_SESSION_TYPE", "").lower() != "x11":
             problems.append("This prototype currently supports X11 sessions only.")
         if not os.environ.get("DISPLAY"):
@@ -211,6 +214,72 @@ class ScreenstoryRecorder:
             self.status.set("Ready · recordings are saved locally")
             self.record_button.configure(state="normal")
 
+    def missing_packages(self, window_mode: bool) -> list[str]:
+        """Return required Debian packages that are not installed."""
+        packages = BASE_PACKAGES + (WINDOW_PACKAGES if window_mode else [])
+        missing = []
+        for package in packages:
+            check = subprocess.run(
+                ["dpkg-query", "-W", "-f=${db:Status-Status}", package],
+                capture_output=True, text=True, check=False,
+            )
+            if check.returncode != 0 or check.stdout.strip() != "installed":
+                missing.append(package)
+        return missing
+
+    def install_missing_packages(self, packages: list[str]) -> None:
+        """Ask once, then use PolicyKit for an explicit GUI-authorized install."""
+        if not packages:
+            return
+        if not shutil.which("pkexec"):
+            messagebox.showerror(
+                "Cannot request installation",
+                "PolicyKit (pkexec) is unavailable. Screenstory cannot request administrator approval on this system.",
+            )
+            return
+        package_list = " ".join(packages)
+        approved = messagebox.askyesno(
+            "Screenstory needs additional components",
+            "The following packages are missing:\\n\\n"
+            + "\\n".join(f"• {name}" for name in packages)
+            + "\\n\\nScreenstory will ask Linux for administrator approval, "
+              "then download and install these packages. Nothing will be installed unless you approve.\\n\\nContinue?",
+        )
+        if not approved:
+            self.status.set("Installation cancelled · no system changes made")
+            return
+
+        self.record_button.configure(state="disabled")
+        self.status.set("Waiting for administrator approval…")
+        command = [
+            "pkexec", "sh", "-c",
+            "apt-get update && apt-get install -y " + package_list,
+        ]
+
+        def worker() -> None:
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, check=False)
+                detail = (result.stderr or result.stdout or "").strip()
+                self.root.after(0, lambda: self.package_install_finished(result.returncode, detail))
+            except Exception as exc:
+                self.root.after(0, lambda: self.package_install_finished(1, str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def package_install_finished(self, return_code: int, detail: str) -> None:
+        if return_code == 0:
+            self.refresh_windows()
+            self.status.set("Dependencies installed · starting recorder…")
+            self.root.after(250, self.start_recording)
+        else:
+            self.status.set("Dependency installation was not completed")
+            messagebox.showerror(
+                "Installation not completed",
+                "No recording was started. You can retry when ready.\\n\\n"
+                + (detail[-2500:] if detail else "Administrator approval was denied or package installation failed."),
+            )
+            self.record_button.configure(state="normal")
+
     def choose_folder(self) -> None:
         selected = filedialog.askdirectory(initialdir=self.output_dir.get())
         if selected:
@@ -219,8 +288,9 @@ class ScreenstoryRecorder:
     def start_recording(self) -> None:
         if self.process is not None:
             return
-        if not shutil.which("ffmpeg"):
-            messagebox.showerror("FFmpeg missing", "Install FFmpeg, then reopen Screenstory.")
+        missing = self.missing_packages(self.source_mode.get() == "window")
+        if missing:
+            self.install_missing_packages(missing)
             return
         if os.environ.get("XDG_SESSION_TYPE", "").lower() != "x11":
             messagebox.showerror("Unsupported session", "This first prototype requires an X11 session.")
