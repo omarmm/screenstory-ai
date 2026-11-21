@@ -61,6 +61,7 @@ function standard(command: string) {
 describe("Screenstory desktop application", () => {
   beforeEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     invoke.mockReset();
     invoke.mockImplementation((command: string) => standard(command));
   });
