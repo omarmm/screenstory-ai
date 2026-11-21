@@ -38,6 +38,7 @@ struct AppState {
     analysis_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     render_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     render_processes: Arc<Mutex<HashMap<String, u32>>>,
+    capture_sources: Mutex<HashMap<String, CaptureTarget>>,
 }
 struct RecordingSession {
     child: Child,
@@ -47,6 +48,36 @@ struct RecordingSession {
     file_name: String,
     started_at: Instant,
     started_at_ms: u64,
+    capture_backend: String,
+    capture_source_type: String,
+    capture_source_name: String,
+    window_id: Option<u32>,
+    window_width: Option<u32>,
+    window_height: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct CaptureTarget {
+    window_id: Option<u32>,
+    name: String,
+    source_type: String,
+    backend: String,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CaptureSource {
+    id: String,
+    name: String,
+    source_type: String,
+    backend: String,
+    width: u32,
+    height: u32,
+    is_available: bool,
+    is_minimized: bool,
+    app_hint: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -90,6 +121,9 @@ struct RecordingSummary {
     file_name: String,
     created_at: String,
     duration_seconds: f64,
+    capture_backend: String,
+    capture_source_type: String,
+    capture_source_name: String,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +131,7 @@ struct RecordingStatus {
     is_recording: bool,
     file_name: Option<String>,
     started_at_ms: Option<u64>,
+    warning: Option<String>,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,9 +166,31 @@ fn db_connection(project_dir: &Path) -> Result<Connection, AppError> {
          );
          CREATE TABLE IF NOT EXISTS recordings (
              id TEXT PRIMARY KEY, file_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
-             duration_seconds REAL NOT NULL DEFAULT 0
+             duration_seconds REAL NOT NULL DEFAULT 0,
+             capture_backend TEXT NOT NULL DEFAULT 'x11',
+             capture_source_type TEXT NOT NULL DEFAULT 'display',
+             capture_source_name TEXT NOT NULL DEFAULT 'Entire desktop'
          );",
     ).map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not initialize this project's database."))?;
+
+    let columns = {
+        let mut statement = connection.prepare("PRAGMA table_info(recordings)")
+            .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?;
+        statement.query_map([], |row| row.get::<_, String>(1))
+            .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?
+    };
+    for (column, declaration) in [
+        ("capture_backend", "capture_backend TEXT NOT NULL DEFAULT 'x11'"),
+        ("capture_source_type", "capture_source_type TEXT NOT NULL DEFAULT 'display'"),
+        ("capture_source_name", "capture_source_name TEXT NOT NULL DEFAULT 'Entire desktop'"),
+    ] {
+        if !columns.iter().any(|existing| existing == column) {
+            connection.execute_batch(&format!("ALTER TABLE recordings ADD COLUMN {declaration};"))
+                .map_err(|_| AppError::new("PROJECT_DATABASE_MIGRATION_FAILED", "Could not add capture-source details to this project."))?;
+        }
+    }
     Ok(connection)
 }
 fn project_summary(connection: &Connection) -> Result<ProjectSummary, AppError> {
@@ -480,6 +537,76 @@ fn open_project(
     Ok(summary)
 }
 #[tauri::command]
+fn list_capture_sources(state: State<'_, AppState>) -> Result<Vec<CaptureSource>, AppError> {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_ascii_lowercase();
+    if session != "x11" {
+        state.capture_sources.lock().map_err(|_| AppError::new("STATE_LOCK_ERROR", "Capture-source state is unavailable."))?.clear();
+        return Ok(vec![CaptureSource {
+            id: "unsupported-session".into(),
+            name: if session == "wayland" { "Wayland desktop capture" } else { "Unsupported desktop session" }.into(),
+            source_type: "display".into(),
+            backend: if session == "wayland" { "portal-pipewire" } else { "unsupported" }.into(),
+            width: 0,
+            height: 0,
+            is_available: false,
+            is_minimized: false,
+            app_hint: None,
+        }]);
+    }
+    let display = capture::display_dimensions()
+        .map_err(|message| AppError::new("X11_DISPLAY_UNAVAILABLE", message))?;
+    let windows = capture::list_x11_windows()
+        .map_err(|message| AppError::new("X11_WINDOW_ENUMERATION_FAILED", message))?;
+    let session_id = format!("c{}-{}", now_ms(), std::process::id());
+    let display_id = format!("{session_id}-display");
+    let mut registry = HashMap::new();
+    registry.insert(display_id.clone(), CaptureTarget {
+        window_id: None,
+        name: "Entire desktop".into(),
+        source_type: "display".into(),
+        backend: "x11".into(),
+        width: display.width,
+        height: display.height,
+    });
+    let mut result = vec![CaptureSource {
+        id: display_id,
+        name: format!("Entire desktop · {} × {}", display.width, display.height),
+        source_type: "display".into(),
+        backend: "x11".into(),
+        width: display.width,
+        height: display.height,
+        is_available: true,
+        is_minimized: false,
+        app_hint: None,
+    }];
+    for window in windows {
+        let id = format!("{session_id}-window-{:x}", window.window_id);
+        let source_name = window.title.clone();
+        registry.insert(id.clone(), CaptureTarget {
+            window_id: Some(window.window_id),
+            name: source_name.clone(),
+            source_type: "window".into(),
+            backend: "x11".into(),
+            width: window.width,
+            height: window.height,
+        });
+        result.push(CaptureSource {
+            id,
+            name: source_name,
+            source_type: "window".into(),
+            backend: "x11".into(),
+            width: window.width,
+            height: window.height,
+            is_available: window.is_visible && !window.is_minimized,
+            is_minimized: window.is_minimized,
+            app_hint: window.app_hint,
+        });
+    }
+    *state.capture_sources.lock().map_err(|_| AppError::new("STATE_LOCK_ERROR", "Capture-source state is unavailable."))? = registry;
+    Ok(result)
+}
+
+#[tauri::command]
 fn list_recordings(state: State<'_, AppState>) -> Result<Vec<RecordingSummary>, AppError> {
     let active = state.active_project.lock().map_err(|_| {
         AppError::new(
@@ -495,7 +622,7 @@ fn list_recordings(state: State<'_, AppState>) -> Result<Vec<RecordingSummary>, 
     })?;
     let connection = db_connection(directory)?;
     let mut statement = connection.prepare(
-        "SELECT id, file_name, created_at, duration_seconds FROM recordings ORDER BY created_at DESC"
+        "SELECT id, file_name, created_at, duration_seconds, capture_backend, capture_source_type, capture_source_name FROM recordings ORDER BY created_at DESC"
     ).map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not read this project's recordings."))?;
     let rows = statement
         .query_map([], |row| {
@@ -504,6 +631,9 @@ fn list_recordings(state: State<'_, AppState>) -> Result<Vec<RecordingSummary>, 
                 file_name: row.get(1)?,
                 created_at: row.get(2)?,
                 duration_seconds: row.get(3)?,
+                capture_backend: row.get(4)?,
+                capture_source_type: row.get(5)?,
+                capture_source_name: row.get(6)?,
             })
         })
         .map_err(|_| {
@@ -521,226 +651,172 @@ fn list_recordings(state: State<'_, AppState>) -> Result<Vec<RecordingSummary>, 
 }
 #[tauri::command]
 fn get_recording_status(state: State<'_, AppState>) -> Result<RecordingStatus, AppError> {
-    let recording = state.recording.lock().map_err(|_| {
-        AppError::new(
-            "STATE_LOCK_ERROR",
-            "Recording state is temporarily unavailable.",
-        )
+    let mut recording = state.recording.lock().map_err(|_| {
+        AppError::new("STATE_LOCK_ERROR", "Recording state is temporarily unavailable.")
     })?;
+    let warning = if let Some(session) = recording.as_ref() {
+        match session.window_id {
+            Some(window_id) => {
+                let current = capture::get_window(window_id).ok().flatten();
+                match current {
+                    Some(window) if window.is_visible && !window.is_minimized
+                        && Some(window.width) == session.window_width
+                        && Some(window.height) == session.window_height => None,
+                    _ => Some(format!(
+                        "The selected window “{}” was closed, minimized, or resized. Screenstory stopped recording and saved the captured portion.",
+                        session.capture_source_name
+                    )),
+                }
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    if let Some(message) = warning {
+        let session = recording.take().ok_or_else(|| AppError::new("RECORDING_STATE_ERROR", "The recording session could not be finalized."))?;
+        drop(recording);
+        let _ = finalize_recording_session(session)?;
+        return Ok(RecordingStatus {
+            is_recording: false,
+            file_name: None,
+            started_at_ms: None,
+            warning: Some(message),
+        });
+    }
     Ok(match recording.as_ref() {
         Some(session) => RecordingStatus {
             is_recording: true,
             file_name: Some(session.file_name.clone()),
             started_at_ms: Some(session.started_at_ms),
+            warning: None,
         },
         None => RecordingStatus {
             is_recording: false,
             file_name: None,
             started_at_ms: None,
+            warning: None,
         },
     })
 }
+
 #[tauri::command]
-fn start_recording(state: State<'_, AppState>) -> Result<RecordingStarted, AppError> {
-    let active = state.active_project.lock().map_err(|_| {
-        AppError::new(
-            "STATE_LOCK_ERROR",
-            "Project state is temporarily unavailable.",
-        )
-    })?;
-    let project_dir = active.as_ref().cloned().ok_or_else(|| {
-        AppError::new(
-            "NO_ACTIVE_PROJECT",
-            "Create or open a project before recording.",
-        )
-    })?;
+fn start_recording(capture_source_id: String, state: State<'_, AppState>) -> Result<RecordingStarted, AppError> {
+    let active = state.active_project.lock().map_err(|_| AppError::new("STATE_LOCK_ERROR", "Project state is temporarily unavailable."))?;
+    let project_dir = active.as_ref().cloned().ok_or_else(|| AppError::new("NO_ACTIVE_PROJECT", "Create or open a project before recording."))?;
     drop(active);
 
-    let mut current = state.recording.lock().map_err(|_| {
-        AppError::new(
-            "STATE_LOCK_ERROR",
-            "Recording state is temporarily unavailable.",
-        )
-    })?;
+    let mut current = state.recording.lock().map_err(|_| AppError::new("STATE_LOCK_ERROR", "Recording state is temporarily unavailable."))?;
     if current.is_some() {
-        return Err(AppError::new(
-            "RECORDING_ALREADY_ACTIVE",
-            "A recording is already in progress.",
-        ));
+        return Err(AppError::new("RECORDING_ALREADY_ACTIVE", "A recording is already in progress."));
     }
-
-    let session = std::env::var("XDG_SESSION_TYPE")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_ascii_lowercase();
     if session != "x11" {
-        return Err(AppError::new("UNSUPPORTED_CAPTURE_SESSION", "This build currently records full desktops in X11 sessions only. Wayland capture is not enabled yet."));
+        return Err(AppError::new("UNSUPPORTED_CAPTURE_SESSION", "This build currently supports capture in X11 sessions. Wayland recording will be enabled after portal/PipeWire end-to-end verification."));
     }
-    let display = std::env::var("DISPLAY").map_err(|_| {
-        AppError::new(
-            "DISPLAY_UNAVAILABLE",
-            "The X11 display is unavailable. Launch Screenstory from your desktop session.",
-        )
-    })?;
-    let (width, height) = screen_dimensions()?;
-    if !Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-    {
+    let display = std::env::var("DISPLAY").map_err(|_| AppError::new("DISPLAY_UNAVAILABLE", "The X11 display is unavailable. Launch Screenstory from your desktop session."))?;
+    let target = state.capture_sources.lock().map_err(|_| AppError::new("STATE_LOCK_ERROR", "Capture-source state is temporarily unavailable."))?
+        .get(&capture_source_id).cloned()
+        .ok_or_else(|| AppError::new("STALE_CAPTURE_SOURCE", "The selected capture source expired. Refresh the source list and try again."))?;
+    if target.backend != "x11" {
+        return Err(AppError::new("CAPTURE_BACKEND_UNAVAILABLE", "The selected capture backend is not available in this desktop session."));
+    }
+    let (window_id, width, height) = match target.window_id {
+        Some(window_id) => {
+            let window = capture::get_window(window_id)
+                .map_err(|message| AppError::new("X11_WINDOW_UNAVAILABLE", message))?
+                .filter(|window| window.is_visible && !window.is_minimized)
+                .ok_or_else(|| AppError::new("CAPTURE_WINDOW_NOT_VISIBLE", "The selected window is no longer visible. Restore it, refresh the source list, and try again."))?;
+            (Some(window_id), window.width, window.height)
+        }
+        None => {
+            let display = capture::display_dimensions().map_err(|message| AppError::new("X11_DISPLAY_UNAVAILABLE", message))?;
+            (None, display.width, display.height)
+        }
+    };
+    if width < 80 || height < 50 || width > 7680 || height > 4320 {
+        return Err(AppError::new("CAPTURE_DIMENSIONS_UNSUPPORTED", "The selected capture source dimensions are outside the supported range."));
+    }
+    if !Command::new("ffmpeg").arg("-version").output().map(|output| output.status.success()).unwrap_or(false) {
         return Err(AppError::new("FFMPEG_MISSING", "FFmpeg is required for recording. Install it from your Linux Software Manager, then recheck dependencies."));
     }
 
     let recordings_dir = project_dir.join("recordings");
-    fs::create_dir_all(&recordings_dir).map_err(|_| {
-        AppError::new(
-            "RECORDING_FOLDER_ERROR",
-            "Could not prepare this project's recordings folder.",
-        )
-    })?;
+    fs::create_dir_all(&recordings_dir).map_err(|_| AppError::new("RECORDING_FOLDER_ERROR", "Could not prepare this project's recordings folder."))?;
     let id = now_ms().to_string();
     let file_name = format!("recording-{id}.mp4");
     let output_file = recordings_dir.join(&file_name);
     let log_file = recordings_dir.join(format!("recording-{id}.log"));
-    let log = File::create(log_file)
-        .map_err(|_| AppError::new("RECORDING_LOG_ERROR", "Could not create the recording log."))?;
+    let log = File::create(log_file).map_err(|_| AppError::new("RECORDING_LOG_ERROR", "Could not create the recording log."))?;
 
-    let mut child = Command::new("ffmpeg")
+    let mut command = Command::new("ffmpeg");
+    command.args([
+        "-hide_banner", "-loglevel", "warning",
+        "-f", "x11grab", "-framerate", "30", "-draw_mouse", "1",
+    ]);
+    if let Some(window_id) = window_id {
+        command.args(["-window_id", &format!("0x{window_id:x}")]);
+    }
+    command.args(["-video_size"]).arg(format!("{width}x{height}"))
+        .arg("-i").arg(&display)
         .args([
-            "-hide_banner",
-            "-loglevel",
-            "warning",
-            "-f",
-            "x11grab",
-            "-framerate",
-            "30",
-            "-draw_mouse",
-            "1",
-            "-video_size",
-        ])
-        .arg(format!("{width}x{height}"))
-        .arg("-i")
-        .arg(display)
-        .args([
-            "-an",
-            "-vf",
-            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            "-y",
+            "-an", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", "-y",
         ])
         .arg(&output_file)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::from(log))
-        .spawn()
-        .map_err(|_| {
-            AppError::new(
-                "RECORDING_START_FAILED",
-                "FFmpeg could not be started. Check that FFmpeg is installed correctly.",
-            )
-        })?;
-
-    let stdin = child.stdin.take().ok_or_else(|| {
-        AppError::new(
-            "RECORDING_START_FAILED",
-            "Could not initialize the recording process.",
-        )
-    })?;
-    if let Some(status) = child.try_wait().map_err(|_| {
-        AppError::new(
-            "RECORDING_START_FAILED",
-            "Could not verify that recording started.",
-        )
-    })? {
+        .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::from(log));
+    let mut child = command.spawn().map_err(|_| AppError::new("RECORDING_START_FAILED", "FFmpeg could not be started. Check that FFmpeg is installed correctly."))?;
+    let stdin = child.stdin.take().ok_or_else(|| AppError::new("RECORDING_START_FAILED", "Could not initialize the recording process."))?;
+    if let Some(status) = child.try_wait().map_err(|_| AppError::new("RECORDING_START_FAILED", "Could not verify that recording started."))? {
         return Err(AppError::new("RECORDING_START_FAILED", format!("FFmpeg stopped immediately (exit status {}). Check the recording log in this project.", status)));
     }
     let started_at_ms = now_ms();
+    let capture_source_name = target.name.clone();
+    let capture_source_type = target.source_type.clone();
+    let capture_backend = target.backend.clone();
     *current = Some(RecordingSession {
-        child,
-        stdin,
-        project_dir,
-        output_file,
-        file_name: file_name.clone(),
-        started_at: Instant::now(),
-        started_at_ms,
+        child, stdin, project_dir, output_file, file_name: file_name.clone(),
+        started_at: Instant::now(), started_at_ms,
+        capture_backend, capture_source_type, capture_source_name,
+        window_id, window_width: window_id.map(|_| width), window_height: window_id.map(|_| height),
     });
-    Ok(RecordingStarted {
-        file_name,
-        started_at_ms,
-    })
+    Ok(RecordingStarted { file_name, started_at_ms })
 }
-#[tauri::command]
-fn stop_recording(state: State<'_, AppState>) -> Result<RecordingSummary, AppError> {
-    let mut session = state
-        .recording
-        .lock()
-        .map_err(|_| {
-            AppError::new(
-                "STATE_LOCK_ERROR",
-                "Recording state is temporarily unavailable.",
-            )
-        })?
-        .take()
-        .ok_or_else(|| {
-            AppError::new(
-                "NO_ACTIVE_RECORDING",
-                "There is no active recording to stop.",
-            )
-        })?;
+
+fn finalize_recording_session(mut session: RecordingSession) -> Result<RecordingSummary, AppError> {
     let _ = session.stdin.write_all(b"q\n");
     let _ = session.stdin.flush();
-    let status = session.child.wait().map_err(|_| {
-        AppError::new(
-            "RECORDING_FINALIZE_FAILED",
-            "Could not finalize the recording. Check the recording log.",
-        )
-    })?;
+    let status = session.child.wait().map_err(|_| AppError::new("RECORDING_FINALIZE_FAILED", "Could not finalize the recording. Check the recording log."))?;
     let duration_seconds = session.started_at.elapsed().as_secs_f64();
-    if !status.success()
-        || !session.output_file.is_file()
-        || fs::metadata(&session.output_file)
-            .map(|meta| meta.len())
-            .unwrap_or(0)
-            == 0
-    {
-        return Err(AppError::new(
-            "RECORDING_FAILED",
-            format!(
-                "FFmpeg could not finalize {}. The project recording log may contain more details.",
-                session.file_name
-            ),
-        ));
+    if !status.success() || !session.output_file.is_file()
+        || fs::metadata(&session.output_file).map(|meta| meta.len()).unwrap_or(0) == 0 {
+        return Err(AppError::new("RECORDING_FAILED", format!("FFmpeg could not finalize {}. The project recording log may contain more details.", session.file_name)));
     }
     let created_at = session.started_at_ms.to_string();
     let connection = db_connection(&session.project_dir)?;
     connection.execute(
-        "INSERT INTO recordings (id, file_name, created_at, duration_seconds) VALUES (?1, ?2, ?3, ?4)",
-        params![&session.file_name, &session.file_name, created_at, duration_seconds],
+        "INSERT INTO recordings (id, file_name, created_at, duration_seconds, capture_backend, capture_source_type, capture_source_name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![&session.file_name, &session.file_name, created_at, duration_seconds, &session.capture_backend, &session.capture_source_type, &session.capture_source_name],
     ).map_err(|_| AppError::new("RECORDING_METADATA_FAILED", "The video was saved, but its project record could not be updated."))?;
-    connection
-        .execute(
-            "UPDATE project SET updated_at = ?1",
-            params![now_ms().to_string()],
-        )
-        .map_err(|_| {
-            AppError::new(
-                "PROJECT_DATABASE_ERROR",
-                "The video was saved, but project metadata could not be updated.",
-            )
-        })?;
+    connection.execute("UPDATE project SET updated_at = ?1", params![now_ms().to_string()])
+        .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "The video was saved, but project metadata could not be updated."))?;
     Ok(RecordingSummary {
         id: session.file_name.clone(),
         file_name: session.file_name,
         created_at,
         duration_seconds,
+        capture_backend: session.capture_backend,
+        capture_source_type: session.capture_source_type,
+        capture_source_name: session.capture_source_name,
     })
+}
+
+#[tauri::command]
+fn stop_recording(state: State<'_, AppState>) -> Result<RecordingSummary, AppError> {
+    let session = state.recording.lock().map_err(|_| AppError::new("STATE_LOCK_ERROR", "Recording state is temporarily unavailable."))?
+        .take().ok_or_else(|| AppError::new("NO_ACTIVE_RECORDING", "There is no active recording to stop."))?;
+    finalize_recording_session(session)
 }
 
 pub fn run() {
@@ -754,6 +830,7 @@ pub fn run() {
             create_project,
             open_project,
             list_recordings,
+            list_capture_sources,
             get_recording_status,
             start_recording,
             stop_recording,
