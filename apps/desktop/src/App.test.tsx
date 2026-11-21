@@ -13,7 +13,7 @@ const report = { dependencies: [{
 const project = { id: "p12345-123", name: "Demo project", createdAt: "1730000000000", updatedAt: "1730000000000", recordingsCount: 1 };
 const recording = { id: "recording-1", fileName: "recording-1.mp4", createdAt: "1730000000000", durationSeconds: 12 };
 const timeline = {
-  schemaVersion: 1, timelineId: "t12345-77", recordingId: "recording-1",
+  schemaVersion: 2, timelineId: "t12345-77", recordingId: "recording-1",
   sourceFileName: "recording-1.mp4", sourceDurationMs: 12000, sourceAnalysisRunId: "a12345-77",
   revision: 1, createdAtMs: 100, updatedAtMs: 100, status: "draft", language: "en",
   steps: [{
