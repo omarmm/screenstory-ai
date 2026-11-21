@@ -4,6 +4,17 @@
 **Approval basis:** Product owner instruction to continue Screenstory implementation through MVP completion (2026-11-21)  
 **Milestone:** M6
 
+## Approved implementation decisions
+
+- The render plan is derived only from the current persisted timeline revision and a managed recording ID. No frontend-supplied path is accepted.
+- The plan records source identity, timeline revision, source dimensions/frame rate/audio presence, renderer version, active zoom segments and annotations. Its serialized representation is immutable for the duration of a run.
+- FFmpeg is invoked directly with an argument vector. Filter expressions contain only validated numeric values and application-managed text-file paths; annotation text is never interpolated into an FFmpeg command string.
+- Zoom motion uses FFmpeg's frame-evaluated zoom filter with a deterministic piecewise expression. Only accepted AI suggestions and manual zoom segments are included; pending and rejected AI suggestions are excluded.
+- Annotation rendering uses FFmpeg drawtext with text loaded from UTF-8 files and text shaping enabled. The renderer must verify that the installed FFmpeg build exposes the shaping option and that fontconfig can resolve a font for Arabic before enabling annotation export. It must fail closed with a typed, actionable error when either capability is absent; it must not silently render broken Arabic.
+- Source audio is mapped when present and encoded to AAC. The source video is never modified.
+- Preview is a lower-resolution proxy produced from the same immutable plan and filter graph as the final export. The proxy is not treated as the final deliverable.
+- Export output is written to a unique temporary file under the project export workspace, probed, fsynced and atomically renamed only after validation. Every run is tied to the source recording and saved timeline revision.
+
 ## 1. Scope
 
 Compose an immutable source MP4 with the current validated timeline into a preview and a final MP4 tutorial. Preview and export must use one deterministic composition plan. The original recording is never overwritten.

@@ -3,7 +3,7 @@
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
 **Current milestone:** M6 — video preview and MP4 tutorial export  
-**Status:** M1–M5 implementation is committed. M5 passed full CI and produced a Debian artifact. Version 0.4.0 package build is running after the version bump. Target-device smoke testing and a real Gemini request are still pending. This is a verified development build, not a completed MVP release.
+**Status:** M1–M5 implementation is committed. The 0.4.0 package build is in CI. M6 SPEC-022 is approved. M6-T301 render-plan/filter-generation foundation and the Linux renderer capability proof are being implemented; preview/export execution is not yet complete. Target-device smoke testing and a real Gemini request remain pending. This is not a completed MVP release.
 
 ## Product scope
 
@@ -100,16 +100,20 @@ Verification:
 
 ## M6 — Video preview and MP4 tutorial export
 
-Specification: `specs/rendering/SPEC-022-video-preview-and-mp4-export.md` (draft; renderer proof and implementation remain).
+Specification: `specs/rendering/SPEC-022-video-preview-and-mp4-export.md` (Approved).
 
-Required:
-- Immutable render plan bound to a saved timeline revision.
-- Preview and export share the exact same plan.
-- Compose only accepted/manual zooms; exclude pending/rejected AI suggestions.
-- Shape Arabic/English captions and verify installed fonts before enabling text rendering.
+Approved rendering decisions:
+- Immutable render plan derived from the saved timeline revision and managed recording ID.
+- One deterministic filter graph shared by preview and export.
+- Accepted AI/manual zooms only; pending/rejected AI suggestions are excluded.
+- FFmpeg drawtext UTF-8 text files with required Arabic text-shaping and font capability checks. Fail closed if shaping is unavailable.
 - Preserve source audio when present.
-- FFmpeg child process with progress, cancellation, bounded resource use, temporary output, ffprobe validation and atomic finalization.
+- Fixed FFmpeg argument vector, temporary output, ffprobe validation, fsync and atomic finalization.
 - Export history tied to source recording and timeline revision.
+
+Implementation:
+- M6-T301 — render-plan and filter-generation foundation plus Linux capability proof: in progress.
+- Preview/export process execution, progress, cancellation, persistent history, UI integration and full renderer verification remain open.
 
 ## Remaining milestones
 
