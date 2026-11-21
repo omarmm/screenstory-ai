@@ -11,7 +11,7 @@ const report = { dependencies: [{
   version: "ffmpeg version 6.1.1", impact: "Desktop recording is available.", canInstall: false, remediation: null,
 }] };
 const project = { id: "p12345-123", name: "Demo project", createdAt: "1730000000000", updatedAt: "1730000000000", recordingsCount: 1 };
-const recording = { id: "recording-1", fileName: "recording-1.mp4", createdAt: "1730000000000", durationSeconds: 12, captureSourceName: "Entire desktop" };
+const recording = { id: "recording-1", fileName: "recording-1.mp4", createdAt: "1730000000000", durationSeconds: 12, captureSourceName: "Entire desktop", hasTimeline: true };
 const captureSource = { id: "capture-test-display", name: "Entire desktop · 1920 × 1080", sourceType: "display", backend: "x11", width: 1920, height: 1080, isAvailable: true, isMinimized: false, appHint: null };
 const timeline = {
   schemaVersion: 2, timelineId: "t12345-77", recordingId: "recording-1",
@@ -119,6 +119,55 @@ describe("Screenstory desktop application", () => {
     expect((select.querySelector('option[value="capture-minimized-window"]') as HTMLOptionElement | null)?.disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Refresh sources" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_capture_sources"));
+  });
+
+  it("explains that a timeline is unavailable until analysis succeeds and a draft is converted", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_projects") return Promise.resolve([project]);
+      if (command === "get_active_project") return Promise.resolve(project);
+      if (command === "list_recordings") return Promise.resolve([{ ...recording, hasTimeline: false }]);
+      return standard(command);
+    });
+    render(<App />);
+    expect(await screen.findByText("No timeline yet")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open timeline" })).toBeNull();
+  });
+
+  it("deletes a recording only after explicit confirmation and refreshes the library", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let deleted = false;
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_projects") return Promise.resolve([project]);
+      if (command === "get_active_project") return Promise.resolve(project);
+      if (command === "list_recordings") return Promise.resolve(deleted ? [] : [recording]);
+      if (command === "delete_recording") { deleted = true; return Promise.resolve(undefined); }
+      return standard(command);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete recording recording-1.mp4" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("delete_recording", { recordingId: "recording-1" }));
+    expect(confirm).toHaveBeenCalled();
+    expect(await screen.findByText("No recordings yet")).toBeTruthy();
+    expect(await screen.findByText(/and its managed data were deleted/)).toBeTruthy();
+    confirm.mockRestore();
+  });
+
+  it("deletes a project only after explicit confirmation and returns to the overview", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let deleted = false;
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_projects") return Promise.resolve(deleted ? [] : [project]);
+      if (command === "get_active_project") return Promise.resolve(deleted ? null : project);
+      if (command === "delete_project") { deleted = true; return Promise.resolve(undefined); }
+      return standard(command);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete project Demo project" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("delete_project", { projectId: project.id }));
+    expect(confirm).toHaveBeenCalled();
+    expect(await screen.findByText("Create a clear story.")).toBeTruthy();
+    expect(await screen.findByText(/and its managed files were deleted/)).toBeTruthy();
+    confirm.mockRestore();
   });
 
   it("opens, edits, and saves a versioned timeline revision", async () => {
