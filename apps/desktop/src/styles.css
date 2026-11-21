@@ -184,3 +184,19 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .timeline-footer>span { color:#7d8ba8; font-size:9px; }
 .pending-zoom-note { margin-top:14px; padding:10px; background:rgba(104,128,222,.08); color:#9eafd9; border-radius:7px; font-size:10px; line-height:1.5; }
 .secondary-button.compact { font-size:9px; padding:7px 9px; }
+
+
+.timeline-tools-section { margin-top:20px; padding-top:18px; border-top:1px solid rgba(255,255,255,.07); }
+.timeline-tools-section h3 { margin:7px 0 0; color:#e7edff; font-size:14px; }
+.timeline-muted { color:#8492ad; font-size:10px; line-height:1.55; margin:10px 0; }
+.zoom-editor-card { margin-top:11px; padding:13px; border:1px solid rgba(151,171,225,.15); border-radius:9px; background:rgba(8,16,33,.55); }
+.zoom-editor-card>p { color:#8b9ab8; font-size:10px; line-height:1.5; }
+.zoom-state { padding:4px 7px; border-radius:10px; background:rgba(132,148,180,.13); color:#aab7d1; font-size:8px; font-weight:800; letter-spacing:.07em; }
+.zoom-state.accepted { color:#8ce0bd; background:rgba(57,170,130,.13); }
+.zoom-state.rejected { color:#e9a0aa; background:rgba(204,82,103,.13); }
+.zoom-state.pending { color:#e9c78d; background:rgba(192,144,63,.13); }
+.zoom-geometry { margin-top:5px; }
+.annotation-options-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin-top:11px; }
+.annotation-options-grid label { display:flex; flex-direction:column; gap:6px; color:#8796b4; font-size:9px; }
+.annotation-options-grid select,.annotation-options-grid input { min-width:0; width:100%; padding:8px; color:#edf2ff; background:#0b1428; border:1px solid rgba(151,171,225,.17); border-radius:6px; font:inherit; font-size:10px; }
+@media (max-width:650px) { .annotation-options-grid { grid-template-columns:1fr; } }
