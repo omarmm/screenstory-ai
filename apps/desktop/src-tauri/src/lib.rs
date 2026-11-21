@@ -376,11 +376,9 @@ fn ffmpeg_export_status() -> DependencyStatus {
             remediation: Some("Install FFmpeg before exporting an MP4."),
         };
     }
-    let missing = [
-        ("libx264", ffmpeg_listing_contains("-encoders", "libx264")),
-        ("AAC", ffmpeg_listing_contains("-encoders", "aac")),
-    ].into_iter().filter_map(|(name, available)| if available { None } else { Some(name) }).collect::<Vec<_>>();
-    if missing.is_empty() {
+    let has_h264 = ffmpeg_listing_contains("-encoders", "libx264");
+    let has_aac = ffmpeg_listing_contains("-encoders", "aac");
+    if has_h264 && has_aac {
         DependencyStatus {
             id: "ffmpeg-export",
             feature: "MP4 export · H.264 and AAC encoders",
@@ -397,7 +395,7 @@ fn ffmpeg_export_status() -> DependencyStatus {
             feature: "MP4 export · H.264 and AAC encoders",
             status: "unsupported",
             version: None,
-            impact: "The installed FFmpeg build is missing: ".to_string().leak(),
+            impact: "The installed FFmpeg build is missing the required libx264 and/or AAC encoder.",
             packages: Vec::new(),
             can_install: false,
             remediation: Some("This FFmpeg build does not include the required encoders. Install a distribution FFmpeg build that provides libx264 and AAC support."),
