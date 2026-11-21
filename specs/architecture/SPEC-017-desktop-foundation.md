@@ -1,6 +1,6 @@
 # SPEC-017 — Tauri Desktop Foundation
 
-**Status:** Draft — requires product-owner review and approval  
+**Status:** Approved  
 **Milestone:** M1 — Desktop Foundation  
 **Related:** PRD-001, ADR-001, ADR-010, ARCH-001, SPEC-002, SPEC-015, SPEC-016
 
@@ -190,11 +190,15 @@ The project workspace remains local-first. Large media assets must not be stored
 
 Each task must have its own handoff and verification evidence. A task cannot enter Ready until this specification is approved and its acceptance criteria/dependencies are explicit.
 
-## 14. Open decisions
+## 14. Approved implementation choices
 
-- Which package manager and lockfile policy will be selected for the React frontend?
-- Which frontend test runner and component-testing approach will be used?
-- Which Rust error representation will be standardized across command boundaries?
-- Should project creation be included in M1 or deferred to the project-management specification?
-- Which minimum Linux Mint/Ubuntu base release is in the initial support matrix?
-- Should Flatpak be a secondary distribution format after the primary .deb path is verified?
+- Frontend package manager: pnpm, with a committed lockfile and pinned package-manager version.
+- Frontend test runner: Vitest with React Testing Library for component behavior.
+- Rust command error model: application-owned typed error codes and safe messages; use thiserror for internal error composition. Do not serialize arbitrary error strings or stack traces to the frontend.
+- Project creation: defer to SPEC-001. M1 provides a truthful empty-state shell and does not fake project creation.
+- Initial Linux support baseline: Linux Mint 21.3+ (Ubuntu 22.04 base) and Linux Mint 22.x (Ubuntu 24.04 base), x86_64, subject to CI package/build verification. Revisit if a required WebKitGTK 4.1 package is unavailable in the official base repositories.
+- Primary distribution format: .deb. Evaluate Flatpak only after the .deb path is working and dependency/portal behavior is understood.
+
+## 15. Approval note
+
+The specification is approved for implementation sequencing. Approval authorizes M1 tasks only; each task must still meet its own handoff, test, and verification requirements.
