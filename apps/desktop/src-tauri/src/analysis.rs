@@ -862,7 +862,7 @@ pub fn get_analysis_draft(run_id: String, state: State<'_, AppState>) -> Result<
         .map_err(|_| AppError::new("ANALYSIS_DRAFT_INVALID", "The saved analysis draft is invalid."))
 }
 
-fn analysis_run_id_valid(value: &str) -> bool {
+pub(super) fn analysis_run_id_valid(value: &str) -> bool {
     value.starts_with('a') && value.len() > 2 && value.chars().all(|c| c == 'a' || c == '-' || c.is_ascii_digit())
 }
 
