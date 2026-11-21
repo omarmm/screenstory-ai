@@ -731,13 +731,13 @@ pub fn get_render_status(run_id: String, state: State<'_, AppState>) -> Result<R
 
 #[tauri::command]
 pub fn list_render_history(recording_id: String, state: State<'_, AppState>) -> Result<Vec<RenderStatus>, AppError> {
-    if recording_id.len() < 3 || recording_id.len() > 120 ||
-        !recording_id.starts_with('r') && !recording_id.starts_with("recording-") ||
-        !recording_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if recording_id.len() < 8 || recording_id.len() > 160 {
         return Err(AppError::new("INVALID_RECORDING_ID", "The recording identifier is invalid."));
     }
     let project = state.active_project.lock().map_err(|_| AppError::new("STATE_LOCK_ERROR", "Project state is unavailable."))?
         .as_ref().cloned().ok_or_else(|| AppError::new("NO_ACTIVE_PROJECT", "Open a project to inspect export history."))?;
+    // Use the canonical managed-recording resolver; IDs intentionally match the filename including its extension.
+    let _ = analysis::resolve_recording(&project, &recording_id)?;
     ensure_render_table(&project)?;
     let connection = db_connection(&project)?;
     let mut statement = connection.prepare(
