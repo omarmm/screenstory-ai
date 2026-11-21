@@ -73,7 +73,7 @@ pub struct TimelineZoomSegment {
 
 fn default_transition_duration_ms() -> u64 { 250 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineAnnotation {
     pub id: String,
@@ -102,8 +102,8 @@ pub(super) struct SourceManifest {
     pub(super) frames: Vec<SourceFrame>,
 }
 #[derive(Debug, Deserialize)]
-struct SourceFrame {
-    id: String,
+pub(super) struct SourceFrame {
+    pub(super) id: String,
 }
 
 pub(super) fn ensure_timeline_table(project_dir: &Path) -> Result<(), AppError> {
