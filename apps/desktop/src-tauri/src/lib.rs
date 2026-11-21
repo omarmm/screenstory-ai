@@ -6,7 +6,7 @@ mod render;
 mod capture;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs::{self, File},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -587,16 +587,16 @@ fn stream_dependency_pipe<R: Read + Send + 'static>(
     app: AppHandle,
     dependency_id: String,
     stream: &'static str,
-    captured: Arc<Mutex<Vec<String>>>,
+    captured: Arc<Mutex<VecDeque<String>>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         for line in BufReader::new(reader).lines() {
             let Ok(line) = line else { break; };
             if line.trim().is_empty() { continue; }
             if let Ok(mut output) = captured.lock() {
-                output.push(line.clone());
-                if output.len() > 100 {
-                    output.remove(0);
+                output.push_back(line.clone());
+                while output.len() > 100 {
+                    output.pop_front();
                 }
             }
             let _ = app.emit("dependency-install-output", DependencyInstallEvent {
@@ -630,7 +630,7 @@ fn run_apt_operation(
             "Could not start the system package installer. Check that a graphical authentication agent is running.",
         ))?;
 
-    let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured = Arc::new(Mutex::new(VecDeque::<String>::new()));
     let stdout = child.stdout.take().ok_or_else(|| AppError::new(
         "DEPENDENCY_INSTALL_FAILED",
         "Could not read package manager output.",
@@ -714,10 +714,10 @@ fn install_dependency_blocking(
     run_apt_operation(
         dependency_id,
         &app,
-        &["update"],
+        &["-o", "APT::Color=0", "update"],
         "Refreshing APT package indexes…",
     )?;
-    let mut install_args = vec!["install", "-y", "-o", "Dpkg::Use-Pty=0"];
+    let mut install_args = vec!["-o", "APT::Color=0", "install", "-y", "-o", "Dpkg::Use-Pty=0"];
     install_args.extend_from_slice(packages);
     run_apt_operation(
         dependency_id,
