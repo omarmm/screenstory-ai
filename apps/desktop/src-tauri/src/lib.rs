@@ -2,7 +2,6 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 mod analysis;
 mod timeline;
-pub mod rendering;
 mod render;
 
 use std::{
