@@ -574,7 +574,7 @@ fn dependency_report() -> DependencyReport {
 
 fn dependency_packages(dependency_id: &str) -> Option<&'static [&'static str]> {
     match dependency_id {
-        "ffmpeg" => Some(&["ffmpeg"]),
+        "ffmpeg" | "ffmpeg-export" | "zoom-effects" | "caption-rendering" => Some(&["ffmpeg"]),
         "caption-fonts" => Some(&["fontconfig", "fonts-noto-core"]),
         _ => None,
     }
