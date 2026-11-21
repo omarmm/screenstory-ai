@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection};
 use serde::Serialize;
 mod analysis;
+mod timeline;
 
 use std::{
     collections::HashMap,
@@ -744,7 +745,10 @@ pub fn run() {
             analysis::get_analysis_status,
             analysis::cancel_analysis,
             analysis::send_analysis_to_gemini,
-            analysis::get_analysis_draft
+            analysis::get_analysis_draft,
+            timeline::create_timeline_from_draft,
+            timeline::get_timeline_for_recording,
+            timeline::save_timeline
         ])
         .build(tauri::generate_context!())
         .expect("error while building Screenstory");
