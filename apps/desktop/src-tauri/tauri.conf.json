@@ -54,7 +54,8 @@
           "libdbus-1-3",
           "ffmpeg",
           "fontconfig",
-          "fonts-noto-core"
+          "fonts-noto-core",
+          "pkexec"
         ]
       }
     }
