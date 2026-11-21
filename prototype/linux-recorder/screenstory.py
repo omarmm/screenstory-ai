@@ -19,10 +19,7 @@ from tkinter import filedialog, messagebox, ttk
 
 APP_NAME = "Screenstory"
 BASE_PACKAGES = ["ffmpeg"]
-WINDOW_PACKAGES = [
-    "wmctrl", "build-essential", "pkg-config",
-    "libx11-dev", "libxcomposite-dev",
-]
+WINDOW_PACKAGES = ["wmctrl"]
 DEFAULT_OUTPUT = Path.home() / "Videos" / "Screenstory"
 
 
@@ -115,7 +112,7 @@ class ScreenstoryRecorder:
         self.refresh_windows_button = ttk.Button(window_actions, text="Refresh windows",
                                                   command=self.refresh_windows)
         self.refresh_windows_button.pack(side="left")
-        self.window_hint = ttk.Label(window_actions, text="X11 window capture via XComposite")
+        self.window_hint = ttk.Label(window_actions, text="X11 window capture via FFmpeg")
         self.window_hint.pack(side="left", padx=(10, 0))
 
         destination = ttk.LabelFrame(outer, text="Save recordings to", padding=12)
@@ -334,30 +331,26 @@ class ScreenstoryRecorder:
             self.log_handle = log_file.open("w", encoding="utf-8")
 
             if window:
-                helper = self.build_capture_helper()
+                # Use FFmpeg's native x11grab window_id input.
+                command = [
+                    "ffmpeg", "-hide_banner", "-y", "-loglevel", "info",
+                    "-f", "x11grab", "-framerate", "30", "-draw_mouse", "1",
+                    "-window_id", window[0], "-i", os.environ["DISPLAY"],
+                    "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                    str(self.output_file),
+                ]
                 self.log_handle.write(
-                    f"Screenstory window capture\\nWindow ID: {window[0]}\\n"
-                    f"Requested output: {width}x{height}\\n"
-                    f"Started: {dt.datetime.now().isoformat()}\\n"
+                    f"Screenstory FFmpeg window capture\nWindow ID: {window[0]}\n"
+                    f"Window title: {self.selected_window.get()}\n"
+                    f"Started: {dt.datetime.now().isoformat()}\n"
+                    f"Command: {command!r}\n"
                 )
                 self.log_handle.flush()
-                self.capture_process = subprocess.Popen(
-                    [str(helper), window[0], str(width), str(height)],
-                    stdout=subprocess.PIPE, stderr=self.log_handle, bufsize=0
-                )
-                command = [
-                    "ffmpeg", "-hide_banner", "-y", "-loglevel", "warning",
-                    "-f", "rawvideo", "-pixel_format", "rgb24",
-                    "-video_size", f"{width}x{height}", "-framerate", "30",
-                    "-i", "pipe:0", "-an", "-c:v", "libx264",
-                    "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                    "-movflags", "+faststart", str(self.output_file),
-                ]
                 self.process = subprocess.Popen(
-                    command, stdin=self.capture_process.stdout,
-                    stdout=subprocess.DEVNULL, stderr=self.log_handle
+                    command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    stderr=self.log_handle, text=True,
                 )
-                self.capture_process.stdout.close()
             else:
                 command = [
                     "ffmpeg", "-hide_banner", "-y", "-loglevel", "warning",
@@ -399,17 +392,12 @@ class ScreenstoryRecorder:
             return
         self.stop_button.configure(state="disabled")
         self.status.set("Finishing MP4…")
-        if self.capture_process is not None:
-            # Closing the producer makes FFmpeg finalize the rawvideo stream.
-            if self.capture_process.poll() is None:
-                self.capture_process.terminate()
-        else:
-            try:
-                if process.stdin:
-                    process.stdin.write("q\\n")
-                    process.stdin.flush()
-            except (BrokenPipeError, OSError):
-                pass
+        try:
+            if process.stdin:
+                process.stdin.write("q\\n")
+                process.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
         threading.Thread(target=self.wait_for_encoder, daemon=True).start()
 
     def wait_for_encoder(self) -> None:
@@ -441,8 +429,6 @@ class ScreenstoryRecorder:
             return
         output = self.output_file
         return_code = process.returncode
-        if self.capture_process is not None and self.capture_process.returncode not in (None, 0):
-            return_code = self.capture_process.returncode
         self.cleanup_process()
         self.record_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
