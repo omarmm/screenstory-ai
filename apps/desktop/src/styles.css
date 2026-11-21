@@ -382,3 +382,22 @@ option:checked, option:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+.dependency-center {
+  margin: 0 0 22px;
+  padding: 16px;
+  border: 1px solid rgba(219,169,80,.2);
+  border-radius: 12px;
+  background: rgba(14,22,40,.92);
+}
+.dependency-center .section-heading {
+  margin-bottom: 8px;
+}
+.dependency-center .section-heading h2 {
+  margin: 6px 0 0;
+  color: #edf2ff;
+  font-size: 14px;
+}
+.dependency-center .dependency-warning:first-of-type {
+  margin-top: 8px;
+}
