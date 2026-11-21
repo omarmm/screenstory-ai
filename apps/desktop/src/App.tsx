@@ -134,7 +134,7 @@ export default function App() {
       </header>
       <div className="workspace">
         <aside className="sidebar">
-          <div className="sidebar-heading"><span className="eyebrow">YOUR WORKSPACE</span><button className="icon-button" onClick={() => setShowCreate((value) => !value)} aria-label="Create project">＋</button></div>
+          <div className="sidebar-heading"><span className="eyebrow">YOUR WORKSPACE</span><button className="icon-button" onClick={() => setShowCreate((value) => !value)} aria-label="Add project">＋</button></div>
           <button className={"nav-item " + (!activeProject ? "selected" : "")} onClick={() => { if (!capture.isRecording) { setActiveProject(null); setRecordings([]); } }}>
             <span className="nav-icon">⌂</span> Overview
           </button>
