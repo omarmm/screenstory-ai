@@ -75,9 +75,14 @@ fn ffmpeg_status() -> DependencyStatus {
             feature: "Recording and video processing",
             status: "missing",
             version: None,
-            impact: "Screen recording and video processing cannot be used until FFmpeg is installed.",
-            can_install: cfg!(target_os = "linux") && find_executable("pkexec") && find_executable("apt-get"),
-            remediation: Some("Install the FFmpeg package from your Linux distribution repositories."),
+            impact:
+                "Screen recording and video processing cannot be used until FFmpeg is installed.",
+            can_install: cfg!(target_os = "linux")
+                && find_executable("pkexec")
+                && find_executable("apt-get"),
+            remediation: Some(
+                "Install the FFmpeg package from your Linux distribution repositories.",
+            ),
         },
     }
 }
@@ -100,7 +105,9 @@ fn install_ffmpeg() -> InstallResult {
         if !find_executable("pkexec") || !find_executable("apt-get") {
             return InstallResult {
                 success: false,
-                message: "The system package authorization service is unavailable. No changes were made.".into(),
+                message:
+                    "The system package authorization service is unavailable. No changes were made."
+                        .into(),
                 report: dependency_report(),
             };
         }
@@ -114,7 +121,9 @@ fn install_ffmpeg() -> InstallResult {
             .output();
 
         let message = match result {
-            Ok(output) if output.status.success() => "Package installation finished. Verifying FFmpeg…".to_string(),
+            Ok(output) if output.status.success() => {
+                "Package installation finished. Verifying FFmpeg…".to_string()
+            }
             Ok(output) => {
                 let details = String::from_utf8_lossy(&output.stderr);
                 if details.contains("Could not get lock") || details.contains("Unable to acquire") {
@@ -128,10 +137,17 @@ fn install_ffmpeg() -> InstallResult {
             Err(_) => "Could not start the system package installer. No changes were made.".into(),
         };
         let report = dependency_report();
-        let success = report.dependencies.first().is_some_and(|item| item.status == "available");
+        let success = report
+            .dependencies
+            .first()
+            .is_some_and(|item| item.status == "available");
         return InstallResult {
             success,
-            message: if success { "FFmpeg is installed and verified.".into() } else { message },
+            message: if success {
+                "FFmpeg is installed and verified.".into()
+            } else {
+                message
+            },
             report,
         };
     }
@@ -140,7 +156,8 @@ fn install_ffmpeg() -> InstallResult {
     {
         InstallResult {
             success: false,
-            message: "Automatic FFmpeg installation is currently supported only on Linux Mint.".into(),
+            message: "Automatic FFmpeg installation is currently supported only on Linux Mint."
+                .into(),
             report: dependency_report(),
         }
     }
