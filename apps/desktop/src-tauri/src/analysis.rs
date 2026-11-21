@@ -23,6 +23,7 @@ use tauri::State;
 const GEMINI_MODEL: &str = "gemini-4-hydrogen";
 const GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const MAX_FRAMES: usize = 30;
+const MAX_SUPPORTED_FRAMES: usize = 60;
 const MAX_INLINE_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 const MAX_EDGE: u32 = 1024;
 
@@ -775,7 +776,7 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
             .map_err(|_| AppError::new("ANALYSIS_MANIFEST_INVALID", "The frame manifest is invalid."))?;
         manifest.workflow_description = workflow;
         manifest.language = language;
-        if manifest.recording_id != recording_id || manifest.run_id != run_id || manifest.frames.is_empty() || manifest.frames.len() > MAX_FRAMES {
+        if manifest.recording_id != recording_id || manifest.run_id != run_id || manifest.frames.is_empty() || manifest.frames.len() > MAX_SUPPORTED_FRAMES {
             return Err(AppError::new("ANALYSIS_MANIFEST_MISMATCH", "The analysis manifest does not match this run or contains an invalid frame count."));
         }
         let run_dir = project_dir.join("analysis").join(&run_id);
