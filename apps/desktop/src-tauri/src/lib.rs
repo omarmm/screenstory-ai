@@ -1,11 +1,14 @@
 use rusqlite::{params, Connection};
 use serde::Serialize;
+mod analysis;
+
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::Mutex,
+    sync::{atomic::AtomicBool, Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Manager, State};
@@ -29,6 +32,7 @@ impl AppError {
 struct AppState {
     active_project: Mutex<Option<PathBuf>>,
     recording: Mutex<Option<RecordingSession>>,
+    analysis_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 struct RecordingSession {
     child: Child,
@@ -732,7 +736,15 @@ pub fn run() {
             list_recordings,
             get_recording_status,
             start_recording,
-            stop_recording
+            stop_recording,
+            analysis::get_gemini_key_status,
+            analysis::save_gemini_api_key,
+            analysis::delete_gemini_api_key,
+            analysis::start_analysis,
+            analysis::get_analysis_status,
+            analysis::cancel_analysis,
+            analysis::send_analysis_to_gemini,
+            analysis::get_analysis_draft
         ])
         .build(tauri::generate_context!())
         .expect("error while building Screenstory");
