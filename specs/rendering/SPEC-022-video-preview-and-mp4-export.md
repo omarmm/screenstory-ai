@@ -12,7 +12,7 @@
 - Zoom motion uses FFmpeg's frame-evaluated zoom filter with a deterministic piecewise expression. Only accepted AI suggestions and manual zoom segments are included; pending and rejected AI suggestions are excluded.
 - Annotation rendering uses FFmpeg drawtext with text loaded from UTF-8 files and text shaping enabled. The renderer must verify that the installed FFmpeg build exposes the shaping option and that fontconfig can resolve a font for Arabic before enabling annotation export. It must fail closed with a typed, actionable error when either capability is absent; it must not silently render broken Arabic.
 - Source audio is mapped when present and encoded to AAC. The source video is never modified.
-- Preview is a lower-resolution proxy produced from the same immutable plan and filter graph as the final export. The proxy is not treated as the final deliverable.
+- The first MVP uses the exact validated MP4 output as the in-app preview; it is playable through the restricted Tauri asset protocol. A separate lower-resolution proxy is deferred and may only be introduced from the same immutable render plan.
 - Export output is written to a unique temporary file under the project export workspace, probed, fsynced and atomically renamed only after validation. Every run is tied to the source recording and saved timeline revision.
 
 ## 1. Scope
@@ -24,7 +24,7 @@ Compose an immutable source MP4 with the current validated timeline into a previ
 - FFmpeg owns video decoding, zoom composition, subtitle burn-in, encoding, and output validation.
 - Active zoom uses FFmpeg `zoompan` expressions keyed to input timestamps (`it`). Expressions include bounded in/out ramps using each segment's transition duration. Pending/rejected suggestions are excluded.
 - Captions are emitted as UTF-8 Advanced SubStation Alpha (ASS) with per-event text, position, font, alignment, foreground and background. FFmpeg's libass-backed `ass` filter performs text layout and script shaping. Use the best available shaper; when the installed FFmpeg exposes the `shaping` option, request `complex` for Arabic/other complex scripts. When the option is unavailable, only enable Arabic caption rendering after the renderer self-test and target-device visual verification confirm the distribution's libass build uses a complex shaper. Do not silently fall back to visibly broken Arabic.
-- Preview and export are the exact same rendered MP4 for the selected saved revision. A lower-resolution proxy may be added later, but it must be generated from the same render plan.
+- Preview playback uses the same validated MP4 composition as the export for the selected saved revision. A separate lower-resolution proxy is deferred until it can be generated from the identical immutable plan.
 - Preview playback uses Tauri's asset protocol with a narrow allow-list limited to `$HOME/Videos/Screenstory/Projects/**/*`; do not widen it to arbitrary home files.
 
 ## 3. Composition contract
@@ -42,7 +42,7 @@ Compose an immutable source MP4 with the current validated timeline into a previ
 
 - Build an immutable render plan with explicit timeline revision, source identity, output resolution, source frame rate, active zooms, annotations, fonts, FFmpeg/libass capabilities and renderer version.
 - Use FFmpeg filter graphs with arguments passed as fixed argument vectors; no shell interpolation.
-- Apply timestamp-based zoom/pan transitions and ASS text overlays with a verified shaping-capable libass renderer.
+- Apply frame-accurate zoom/pan transitions and UTF-8 ASS text overlays with a verified complex-shaping-capable libass renderer.
 - Use safe intermediate files under the project export workspace.
 - Write to a temporary output file, fsync, run ffprobe validation, and atomically rename on success.
 - On failure/cancel, remove partial output but keep the source, timeline and prior exports intact.
@@ -81,5 +81,5 @@ Compose an immutable source MP4 with the current validated timeline into a previ
 7. Failed/cancelled export leaves source, timeline and previous exports intact.
 8. ffprobe verifies the final MP4 is decodable and matches expected properties.
 9. Render history identifies the exact timeline revision used.
-10. Automated tests cover render-plan validation, zoom expression generation, ASS escaping/color/time generation, FFmpeg argument generation, atomic output finalization, cancellation, and export-history persistence.
+10. Automated tests cover render-plan persistence, frame-accurate zoom expressions, ASS escaping/color/time generation, an actual FFmpeg zoom + Arabic ASS render when CI capabilities are present, FFmpeg argument generation, atomic output finalization, cancellation, and export-history persistence.
 11. Preview loads only the generated file through a narrowly scoped Tauri asset protocol and cannot expose arbitrary user files.

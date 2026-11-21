@@ -76,6 +76,8 @@ struct RenderPlan {
     preserve_source_audio: bool,
     active_zoom_count: usize,
     annotation_count: usize,
+    active_zooms: Vec<timeline::TimelineZoomSegment>,
+    annotations: Vec<timeline::TimelineAnnotation>,
     renderer_version: String,
     subtitle_filter: String,
     subtitle_shaping: String,
@@ -222,9 +224,9 @@ fn zoompan_expressions(zooms: &[&timeline::TimelineZoomSegment], frame_rate: &st
     let mut x = "0".to_string();
     let mut y = "0".to_string();
     for zoom in zooms.iter().rev() {
-        // zoompan exposes the output-frame counter (on), not the input timestamp (it).
-        // Convert all timeline times to the source frame domain so 24/30/60 FPS
-        // recordings use the same frame-accurate zoom boundaries.
+        // Use zoompan's output-frame counter (on) because d=1 emits one output
+        // frame per source frame. The conversion keeps boundaries deterministic
+        // across 24/30/60 FPS constant-frame-rate screen recordings.
         let start_frame = (zoom.start_ms as f64 * fps / 1000.0).round() as u64;
         let end_frame = (zoom.end_ms as f64 * fps / 1000.0).round() as u64;
         if start_frame >= end_frame { continue; }
@@ -432,6 +434,8 @@ fn save_render_plan(request: &RenderRequest, ass: bool) -> Result<(), AppError> 
         preserve_source_audio: request.video.audio_present,
         active_zoom_count: active_zoom_segments(&request.timeline).len(),
         annotation_count: request.timeline.annotations.len(),
+        active_zooms: active_zoom_segments(&request.timeline).into_iter().cloned().collect(),
+        annotations: request.timeline.annotations.clone(),
         renderer_version: request.ffmpeg_version.clone(),
         subtitle_filter: if ass { "libass".to_string() } else { "none".to_string() },
         subtitle_shaping: request.subtitle_shaping.clone(),
@@ -699,6 +703,92 @@ mod tests {
     fn ffmpeg_progress_time_and_frame_rate_are_parsed() {
         assert_eq!(parse_progress_time("12000000"), Some(12000));
         assert!((parse_frame_rate("30000/1001").unwrap() - 29.97002997).abs() < 0.0001);
+    }
+
+    #[test]
+    fn ffmpeg_renders_a_zoom_and_arabic_ass_caption_when_capabilities_are_present() {
+        if Command::new("ffmpeg").arg("-version").output().is_err()
+            || Command::new("ffprobe").arg("-version").output().is_err()
+        {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("screenstory-render-proof-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let input_zoom = timeline::TimelineZoomSegment {
+            start_ms: 0,
+            end_ms: 1000,
+            transition_duration_ms: 250,
+            ..zoom("accepted")
+        };
+        let doc = timeline::TimelineDocument {
+            schema_version: 2,
+            timeline_id: "t12345-77".into(),
+            recording_id: "recording-1".into(),
+            source_file_name: "input.mp4".into(),
+            source_duration_ms: 1000,
+            source_analysis_run_id: "a12345-77".into(),
+            revision: 1,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            status: "draft".into(),
+            language: "ar".into(),
+            steps: vec![],
+            zoom_segments: vec![input_zoom.clone()],
+            annotations: vec![timeline::TimelineAnnotation {
+                id: "caption-1".into(),
+                text: "اضغط على الإعدادات".into(),
+                language: "ar".into(),
+                start_ms: 0,
+                end_ms: 1000,
+                x: 0.1,
+                y: 0.75,
+                max_width: 0.8,
+                font_size: 22,
+                foreground: "#FFFFFF".into(),
+                background: "#000000CC".into(),
+                alignment: "right".into(),
+                direction: "rtl".into(),
+                origin: "manual".into(),
+            }],
+        };
+        let ass_path = root.join("captions.ass");
+        fs::write(&ass_path, generate_ass(&doc, 320, 180).unwrap()).unwrap();
+        let filter = format!(
+            "{},ass=filename='{}':shaping=complex",
+            zoompan_filter(&[&input_zoom], 320, 180, "30/1"),
+            escape_filter_path(&ass_path)
+        );
+        let output_path = root.join("rendered.mp4");
+        let output = Command::new("ffmpeg")
+            .args([
+                "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=1",
+                "-vf", &filter, "-frames:v", "30", "-an",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y",
+            ])
+            .arg(&output_path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "FFmpeg renderer proof failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let probe = Command::new("ffprobe")
+            .args([
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,width,height",
+                "-of", "csv=p=0",
+            ])
+            .arg(&output_path)
+            .output()
+            .unwrap();
+        assert!(probe.status.success(), "ffprobe could not inspect the renderer proof output");
+        let metadata = String::from_utf8_lossy(&probe.stdout);
+        assert!(metadata.contains("h264,320,180"), "Unexpected renderer proof output: {metadata}");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
