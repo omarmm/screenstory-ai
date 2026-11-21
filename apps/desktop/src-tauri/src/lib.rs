@@ -1,3 +1,4 @@
+// Trigger rustfmt automation.
 // Temporary rustfmt extraction trigger; removed after formatting.
 use rusqlite::{params, Connection};
 use serde::Serialize;
