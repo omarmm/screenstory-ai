@@ -23,13 +23,23 @@ type TimelineStep = {
   id: string; title: string; description: string; startMs: number; endMs: number;
   origin: "ai" | "manual"; evidenceFrameIds: string[]; confidence: number | null; evidenceKind: string | null;
 };
+type TimelineZoom = {
+  id: string; startMs: number; endMs: number; x: number; y: number; width: number; height: number;
+  targetScale: number; rationale: string; evidenceFrameIds: string[]; origin: string;
+  approvalStatus: "pending" | "accepted" | "rejected"; transitionDurationMs: number;
+};
+type TimelineAnnotation = {
+  id: string; text: string; language: "ar" | "en" | "mixed"; startMs: number; endMs: number;
+  x: number; y: number; maxWidth: number; fontSize: number; foreground: string; background: string;
+  alignment: "left" | "center" | "right"; direction: "rtl" | "ltr" | "auto"; origin: "manual";
+};
 type TimelineDocument = {
   schemaVersion: number; timelineId: string; recordingId: string; sourceFileName: string;
   sourceDurationMs: number; sourceAnalysisRunId: string; revision: number;
   createdAtMs: number; updatedAtMs: number; status: string; language: string;
   steps: TimelineStep[];
-  zoomSegments: { id: string; startMs: number; endMs: number; x: number; y: number; width: number; height: number; targetScale: number; rationale: string; evidenceFrameIds: string[]; origin: string; approvalStatus: string }[];
-  annotations: unknown[];
+  zoomSegments: TimelineZoom[];
+  annotations: TimelineAnnotation[];
 };
 
 function formatDuration(totalSeconds: number): string {
@@ -280,6 +290,66 @@ export default function App() {
   function sortTimelineSteps() {
     setTimeline((current) => current ? { ...current, steps: [...current.steps].sort((a, b) => a.startMs - b.startMs) } : current);
   }
+  function updateTimelineZoom(index: number, patch: Partial<TimelineZoom>) {
+    setTimeline((current) => current ? {
+      ...current,
+      zoomSegments: current.zoomSegments.map((zoom, zoomIndex) => zoomIndex === index ? { ...zoom, ...patch } : zoom),
+    } : current);
+  }
+  function addManualZoom() {
+    setTimeline((current) => {
+      if (!current) return current;
+      const occupied = current.zoomSegments
+        .filter((zoom) => zoom.origin === "manual" || zoom.approvalStatus === "accepted")
+        .sort((a, b) => a.startMs - b.startMs);
+      let start = 0;
+      for (const zoom of occupied) {
+        if (zoom.startMs - start >= 2000) break;
+        start = Math.max(start, zoom.endMs);
+      }
+      if (current.sourceDurationMs - start < 500) {
+        setError("There is no free time range for another active zoom. Move or reject an existing zoom first.");
+        return current;
+      }
+      return {
+        ...current,
+        zoomSegments: [...current.zoomSegments, {
+          id: "manual-zoom-" + Date.now(), startMs: start, endMs: Math.min(current.sourceDurationMs, start + 2000),
+          x: 0.25, y: 0.25, width: 0.5, height: 0.5, targetScale: 1.5,
+          rationale: "Manual focus region", evidenceFrameIds: [], origin: "manual",
+          approvalStatus: "accepted", transitionDurationMs: 250,
+        }],
+      };
+    });
+  }
+  function removeTimelineZoom(index: number) {
+    setTimeline((current) => current ? {
+      ...current, zoomSegments: current.zoomSegments.filter((_, zoomIndex) => zoomIndex !== index),
+    } : current);
+  }
+  function addTimelineAnnotation() {
+    setTimeline((current) => current ? {
+      ...current,
+      annotations: [...current.annotations, {
+        id: "annotation-" + Date.now(), text: "Add your caption", language: "mixed",
+        startMs: 0, endMs: Math.min(current.sourceDurationMs, 3000),
+        x: 0.08, y: 0.08, maxWidth: 0.84, fontSize: 24,
+        foreground: "#FFFFFF", background: "#000000CC", alignment: "center",
+        direction: "auto", origin: "manual",
+      }],
+    } : current);
+  }
+  function updateTimelineAnnotation(index: number, patch: Partial<TimelineAnnotation>) {
+    setTimeline((current) => current ? {
+      ...current,
+      annotations: current.annotations.map((annotation, annotationIndex) => annotationIndex === index ? { ...annotation, ...patch } : annotation),
+    } : current);
+  }
+  function removeTimelineAnnotation(index: number) {
+    setTimeline((current) => current ? {
+      ...current, annotations: current.annotations.filter((_, annotationIndex) => annotationIndex !== index),
+    } : current);
+  }
   async function saveTimeline() {
     if (!timeline) return;
     setTimelineBusy(true); setError(null);
@@ -470,7 +540,65 @@ export default function App() {
                     ))}
                   </div>
                   <div className="timeline-footer"><button className="secondary-button" onClick={addTimelineStep} disabled={timelineBusy || timeline.steps.length >= 60}>＋ Add manual step</button><span>Changes are local until you save a new revision.</span></div>
-                  {timeline.zoomSegments.length > 0 && <div className="pending-zoom-note">{timeline.zoomSegments.length} AI zoom suggestions saved as pending. They are not applied or rendered in this milestone.</div>}
+                  <section className="timeline-tools-section">
+                    <div className="section-heading"><div><span className="eyebrow">CAMERA MOVEMENT</span><h3>Zoom suggestions</h3></div><button className="secondary-button compact" onClick={addManualZoom} disabled={timelineBusy}>＋ Manual zoom</button></div>
+                    {timeline.zoomSegments.length === 0 && <p className="timeline-muted">No AI zoom suggestions were generated. You can add a manual zoom focus.</p>}
+                    {timeline.zoomSegments.map((zoom, index) => (
+                      <article className="zoom-editor-card" key={zoom.id}>
+                        <div className="timeline-step-top"><strong>{zoom.origin === "ai" ? "AI zoom suggestion" : "Manual zoom"}</strong><span className={"zoom-state " + zoom.approvalStatus}>{zoom.approvalStatus.toUpperCase()}</span><button className="text-button danger-text" onClick={() => removeTimelineZoom(index)} disabled={timelineBusy}>Remove</button></div>
+                        {zoom.origin === "ai" && <p className="timeline-muted">{zoom.rationale} · {zoom.evidenceFrameIds.length} evidence frames</p>}
+                        <div className="timeline-time-grid">
+                          <label>Start ms<input type="number" min={0} max={timeline.sourceDurationMs} value={zoom.startMs} onChange={(event) => updateTimelineZoom(index, { startMs: Number(event.target.value) })} /></label>
+                          <label>End ms<input type="number" min={0} max={timeline.sourceDurationMs} value={zoom.endMs} onChange={(event) => updateTimelineZoom(index, { endMs: Number(event.target.value) })} /></label>
+                          <label>Scale<input type="number" min={1} max={3} step={0.1} value={zoom.targetScale} onChange={(event) => updateTimelineZoom(index, { targetScale: Number(event.target.value) })} /></label>
+                          <label>Transition ms<input type="number" min={0} max={1500} step={50} value={zoom.transitionDurationMs} onChange={(event) => updateTimelineZoom(index, { transitionDurationMs: Number(event.target.value) })} /></label>
+                        </div>
+                        <div className="timeline-time-grid zoom-geometry">
+                          <label>Region X<input type="number" min={0} max={1} step={0.01} value={zoom.x} onChange={(event) => updateTimelineZoom(index, { x: Number(event.target.value) })} /></label>
+                          <label>Region Y<input type="number" min={0} max={1} step={0.01} value={zoom.y} onChange={(event) => updateTimelineZoom(index, { y: Number(event.target.value) })} /></label>
+                          <label>Width<input type="number" min={0.01} max={1} step={0.01} value={zoom.width} onChange={(event) => updateTimelineZoom(index, { width: Number(event.target.value) })} /></label>
+                          <label>Height<input type="number" min={0.01} max={1} step={0.01} value={zoom.height} onChange={(event) => updateTimelineZoom(index, { height: Number(event.target.value) })} /></label>
+                        </div>
+                        {zoom.origin === "ai" && <div className="analysis-actions">
+                          <button className="secondary-button compact" onClick={() => updateTimelineZoom(index, { approvalStatus: "accepted" })} disabled={timelineBusy || zoom.approvalStatus === "accepted"}>Accept zoom</button>
+                          <button className="secondary-button compact" onClick={() => updateTimelineZoom(index, { approvalStatus: "rejected" })} disabled={timelineBusy || zoom.approvalStatus === "rejected"}>Reject suggestion</button>
+                          {zoom.approvalStatus !== "pending" && <button className="text-button" onClick={() => updateTimelineZoom(index, { approvalStatus: "pending" })} disabled={timelineBusy}>Reset to pending</button>}
+                        </div>}
+                      </article>
+                    ))}
+                  </section>
+
+                  <section className="timeline-tools-section">
+                    <div className="section-heading"><div><span className="eyebrow">ON-SCREEN TEXT</span><h3>Annotations</h3></div><button className="secondary-button compact" onClick={addTimelineAnnotation} disabled={timelineBusy}>＋ Add caption</button></div>
+                    {timeline.annotations.length === 0 && <p className="timeline-muted">No captions yet. Add Arabic, English, or mixed-language text overlays.</p>}
+                    {timeline.annotations.map((annotation, index) => (
+                      <article className="zoom-editor-card" key={annotation.id}>
+                        <div className="timeline-step-top"><strong>Caption {index + 1}</strong><span className="timeline-origin manual">MANUAL</span><button className="text-button danger-text" onClick={() => removeTimelineAnnotation(index)} disabled={timelineBusy}>Remove</button></div>
+                        <label className="field-label" htmlFor={"annotation-text-" + annotation.id}>Caption text</label>
+                        <textarea id={"annotation-text-" + annotation.id} className="timeline-textarea" maxLength={500} value={annotation.text} onChange={(event) => updateTimelineAnnotation(index, { text: event.target.value })} />
+                        <div className="timeline-time-grid">
+                          <label>Start ms<input type="number" min={0} max={timeline.sourceDurationMs} value={annotation.startMs} onChange={(event) => updateTimelineAnnotation(index, { startMs: Number(event.target.value) })} /></label>
+                          <label>End ms<input type="number" min={0} max={timeline.sourceDurationMs} value={annotation.endMs} onChange={(event) => updateTimelineAnnotation(index, { endMs: Number(event.target.value) })} /></label>
+                          <label>Font px<input type="number" min={12} max={72} value={annotation.fontSize} onChange={(event) => updateTimelineAnnotation(index, { fontSize: Number(event.target.value) })} /></label>
+                        </div>
+                        <div className="annotation-options-grid">
+                          <label>Language<select value={annotation.language} onChange={(event) => updateTimelineAnnotation(index, { language: event.target.value as TimelineAnnotation["language"] })}><option value="ar">Arabic</option><option value="en">English</option><option value="mixed">Mixed</option></select></label>
+                          <label>Direction<select value={annotation.direction} onChange={(event) => updateTimelineAnnotation(index, { direction: event.target.value as TimelineAnnotation["direction"] })}><option value="auto">Automatic</option><option value="rtl">RTL</option><option value="ltr">LTR</option></select></label>
+                          <label>Alignment<select value={annotation.alignment} onChange={(event) => updateTimelineAnnotation(index, { alignment: event.target.value as TimelineAnnotation["alignment"] })}><option value="right">Right</option><option value="center">Center</option><option value="left">Left</option></select></label>
+                        </div>
+                        <div className="timeline-time-grid">
+                          <label>X<input type="number" min={0} max={1} step={0.01} value={annotation.x} onChange={(event) => updateTimelineAnnotation(index, { x: Number(event.target.value) })} /></label>
+                          <label>Y<input type="number" min={0} max={1} step={0.01} value={annotation.y} onChange={(event) => updateTimelineAnnotation(index, { y: Number(event.target.value) })} /></label>
+                          <label>Max width<input type="number" min={0.1} max={1} step={0.01} value={annotation.maxWidth} onChange={(event) => updateTimelineAnnotation(index, { maxWidth: Number(event.target.value) })} /></label>
+                        </div>
+                        <div className="annotation-options-grid">
+                          <label>Text color<input type="text" value={annotation.foreground} onChange={(event) => updateTimelineAnnotation(index, { foreground: event.target.value })} /></label>
+                          <label>Background color<input type="text" value={annotation.background} onChange={(event) => updateTimelineAnnotation(index, { background: event.target.value })} /></label>
+                        </div>
+                      </article>
+                    ))}
+                    <div className="pending-zoom-note">Accepted zooms and captions are saved in the timeline. This build does not composite them into video yet; preview and MP4 rendering follow in the renderer milestone. Arabic shaping will be verified with the rendering engine before export is enabled.</div>
+                  </section>
                 </section>
               )}
 
