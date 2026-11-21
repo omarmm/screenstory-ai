@@ -62,8 +62,6 @@ struct CaptureTarget {
     name: String,
     source_type: String,
     backend: String,
-    width: u32,
-    height: u32,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -178,9 +176,8 @@ fn db_connection(project_dir: &Path) -> Result<Connection, AppError> {
             .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?;
         let rows = statement.query_map([], |row| row.get::<_, String>(1))
             .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?;
-        let collected = rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?;
-        collected
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AppError::new("PROJECT_DATABASE_ERROR", "Could not inspect recording metadata."))?
     };
     for (column, declaration) in [
         ("capture_backend", "capture_backend TEXT NOT NULL DEFAULT 'x11'"),
@@ -318,6 +315,7 @@ fn dependency_report() -> DependencyReport {
     }
 }
 
+#[cfg(test)]
 fn parse_xrandr_size(output: &str) -> Option<(u32, u32)> {
     let dimensions = output.split("current ").nth(1)?.split(',').next()?;
     let mut parts = dimensions.split_whitespace();
@@ -331,38 +329,6 @@ fn parse_xrandr_size(output: &str) -> Option<(u32, u32)> {
     }
     Some((width, height))
 }
-fn screen_dimensions() -> Result<(u32, u32), AppError> {
-    if let Ok(output) = Command::new("xrandr").arg("--current").output() {
-        if output.status.success() {
-            if let Some(size) = parse_xrandr_size(&String::from_utf8_lossy(&output.stdout)) {
-                return Ok(size);
-            }
-        }
-    }
-    if let Ok(output) = Command::new("xdpyinfo").output() {
-        if output.status.success() {
-            for line in String::from_utf8_lossy(&output.stdout).lines() {
-                if let Some(value) = line.trim().strip_prefix("dimensions:") {
-                    if let Some(size) = value.split_whitespace().next() {
-                        let mut values = size.split('x');
-                        if let (Some(w), Some(h)) = (values.next(), values.next()) {
-                            if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
-                                if w > 0 && h > 0 {
-                                    return Ok((w, h));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Err(AppError::new(
-        "SCREEN_SIZE_UNAVAILABLE",
-        "Screen resolution could not be detected. Check that the X11 desktop session is available.",
-    ))
-}
-
 #[tauri::command]
 fn get_app_info() -> AppInfo {
     AppInfo {
@@ -566,8 +532,6 @@ fn list_capture_sources(state: State<'_, AppState>) -> Result<Vec<CaptureSource>
         name: "Entire desktop".into(),
         source_type: "display".into(),
         backend: "x11".into(),
-        width: display.width,
-        height: display.height,
     });
     let mut result = vec![CaptureSource {
         id: display_id,
@@ -588,8 +552,6 @@ fn list_capture_sources(state: State<'_, AppState>) -> Result<Vec<CaptureSource>
             name: source_name.clone(),
             source_type: "window".into(),
             backend: "x11".into(),
-            width: window.width,
-            height: window.height,
         });
         result.push(CaptureSource {
             id,
