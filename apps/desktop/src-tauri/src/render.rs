@@ -357,7 +357,7 @@ fn build_render_request(project_dir: &Path, run_id: String, recording_id: String
     if document.timeline_id != timeline_id || document.recording_id != recording_id || document.source_analysis_run_id != source_run || document.revision != expected_revision {
         return Err(AppError::new("TIMELINE_INDEX_MISMATCH", "The timeline snapshot does not match the project's current revision."));
     }
-    let (file_name, recording_path) = analysis::resolve_recording(project_dir, &recording_id)?;
+    let (_file_name, recording_path) = analysis::resolve_recording(project_dir, &recording_id)?;
     let video = probe_video(&recording_path)?;
     let version = ffmpeg_version()?;
     if !document.annotations.is_empty() && !filter_is_available("ass") {
