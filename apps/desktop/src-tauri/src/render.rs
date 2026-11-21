@@ -229,7 +229,7 @@ fn filter_is_available(name: &str) -> bool {
     String::from_utf8_lossy(&output.stdout).lines().any(|line| line.split_whitespace().any(|word| word == name))
 }
 
-fn ass_shaping_mode() -> String {
+pub(super) fn ass_shaping_mode() -> String {
     let Ok(output) = Command::new("ffmpeg").args(["-hide_banner", "-h", "filter=ass"]).output() else {
         return "auto".to_string();
     };
