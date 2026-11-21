@@ -119,6 +119,25 @@ Automated verification added:
 - CI checks runs 44946417288 and 44946350274 are still in progress; do not treat earlier failed runs as release evidence.
 - Real export playback and Arabic visual correctness on the target Linux Mint device remain unverified. The M6 artifact must be built from the latest passing commit, not the earlier 0.1.0 scaffold.
 
+## M8 — User-consented runtime dependency installation
+
+Approved specification: `specs/architecture/SPEC-024-user-consented-runtime-dependency-installation.md`.
+
+Partially implemented on `prototype/tauri-foundation` (release source version 0.5.3):
+- Debian package metadata declares mandatory Tauri Linux runtime libraries and PolicyKit; feature-specific FFmpeg and font packages remain optional.
+- Runtime probes cover FFmpeg, FFprobe, H.264/AAC encoders, zoompan, ASS/libass, Noto Sans/Noto Sans Arabic, complex Arabic shaping, and the current X11/Wayland session capability.
+- Recording, analysis, and export recheck the dependencies needed by that feature immediately before use.
+- Missing APT-managed dependencies use a fixed package allowlist and an explicit user confirmation. Installation runs through PolicyKit, refreshes APT indexes, streams real package-manager output to the UI, and re-probes the requested capability.
+- No shell interpolation, arbitrary package names, PPAs, repositories, or signing keys are added.
+
+Not yet verified:
+- No Rust/TypeScript tests, formatter, Clippy, local build, or GitHub Actions run has been executed for these commits.
+- The installer has not yet been exercised on Linux Mint 22.3, including PolicyKit approval/cancellation, a package-manager lock, network failure, and partial install recovery.
+- FFmpeg/libass/encoder/font capability probes and Arabic caption blocking need target-device verification.
+- The 0.5.3 Debian package has not been built or released.
+
+Do not mark SPEC-024 complete until the full acceptance criteria pass on supported Linux Mint versions. All implementation commits for this work include `[skip ci]`; no GitHub Actions build minutes have been used.
+
 ## Remaining milestones
 
 1. M6 — complete the renderer proof, composited preview, deterministic MP4 export, audio preservation and output verification.
