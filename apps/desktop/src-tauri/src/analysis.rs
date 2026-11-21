@@ -277,6 +277,7 @@ fn sample_timestamps(duration_seconds: f64) -> Vec<u64> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)] // Internal persistence helper updates one complete analysis-run snapshot.
 fn set_run_status(
     project_dir: &Path,
     run_id: &str,
@@ -302,6 +303,7 @@ fn set_run_status(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Worker receives an immutable run context plus its cancellation token.
 fn extract_worker(
     project_dir: PathBuf,
     run_id: String,
