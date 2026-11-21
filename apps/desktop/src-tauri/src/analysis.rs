@@ -659,6 +659,50 @@ fn response_schema() -> Value {
     })
 }
 
+fn gemini_retry_delay(attempt: usize, retry_after: Option<&str>) -> Duration {
+    if let Some(seconds) = retry_after.and_then(|value| value.trim().parse::<u64>().ok()) {
+        return Duration::from_secs(seconds.clamp(1, 15));
+    }
+    Duration::from_secs(1_u64 << attempt.min(3))
+}
+
+fn redact_provider_error_body(body: &str, api_key: &str) -> String {
+    let sanitized = if api_key.is_empty() {
+        body.to_string()
+    } else {
+        body.replace(api_key, "[REDACTED]")
+    };
+    sanitized.chars().take(4096).collect()
+}
+
+fn append_gemini_http_error(
+    run_dir: &Path,
+    status: u16,
+    attempt: usize,
+    request_id: Option<&str>,
+    retry_after: Option<&str>,
+    body: &str,
+    api_key: &str,
+) {
+    let diagnostic = json!({
+        "timestamp_ms": now_ms(),
+        "provider": "google-gemini",
+        "model": GEMINI_MODEL,
+        "http_status": status,
+        "attempt": attempt + 1,
+        "request_id": request_id,
+        "retry_after": retry_after,
+        "response_body": redact_provider_error_body(body, api_key)
+    });
+    let path = run_dir.join("provider-errors.jsonl");
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut line) = serde_json::to_vec(&diagnostic) {
+            line.push(b'\\n');
+            let _ = file.write_all(&line);
+        }
+    }
+}
+
 fn gemini_request_body(manifest: &FrameManifest, run_dir: &Path) -> Result<Value, AppError> {
     let mut content = vec![json!({
         "type":"text",
@@ -760,14 +804,40 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
                 }
                 Ok(result) => {
                     let status = result.status().as_u16();
+                    let request_id = result.headers()
+                        .get("x-goog-request-id")
+                        .or_else(|| result.headers().get("x-request-id"))
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned);
+                    let retry_after = result.headers()
+                        .get("retry-after")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned);
+                    let response_body = result.text().unwrap_or_else(|_| "[response body could not be read]".to_string());
+                    append_gemini_http_error(
+                        &run_dir,
+                        status,
+                        attempt,
+                        request_id.as_deref(),
+                        retry_after.as_deref(),
+                        &response_body,
+                        &api_key,
+                    );
+
                     if status == 401 || status == 403 {
                         return Err(AppError::new("GEMINI_AUTH_FAILED", "Google rejected the Gemini API key. Check the key in Screenstory settings."));
                     } else if status == 429 {
                         last_error_code = "GEMINI_RATE_LIMITED";
-                        if attempt < 2 { thread::sleep(Duration::from_millis(500 * (attempt + 1) as u64)); continue; }
+                        if attempt < 2 {
+                            thread::sleep(gemini_retry_delay(attempt, retry_after.as_deref()));
+                            continue;
+                        }
                     } else if status >= 500 {
                         last_error_code = "GEMINI_SERVER_ERROR";
-                        if attempt < 2 { thread::sleep(Duration::from_millis(500 * (attempt + 1) as u64)); continue; }
+                        if attempt < 2 {
+                            thread::sleep(gemini_retry_delay(attempt, retry_after.as_deref()));
+                            continue;
+                        }
                     } else {
                         return Err(AppError::new("GEMINI_REQUEST_REJECTED", format!("Gemini rejected the analysis request (HTTP {status}). Check the selected model and request settings.")));
                     }
@@ -899,6 +969,25 @@ mod tests {
         assert_eq!(scaled_dimension(1920, 1080), (1024, 576));
         assert_eq!(scaled_dimension(1080, 1920), (576, 1024));
         assert_eq!(scaled_dimension(800, 600), (800, 600));
+    }
+
+    #[test]
+    fn gemini_retry_delay_uses_bounded_backoff_and_retry_after() {
+        assert_eq!(gemini_retry_delay(0, None), Duration::from_secs(1));
+        assert_eq!(gemini_retry_delay(1, None), Duration::from_secs(2));
+        assert_eq!(gemini_retry_delay(2, None), Duration::from_secs(4));
+        assert_eq!(gemini_retry_delay(0, Some("7")), Duration::from_secs(7));
+        assert_eq!(gemini_retry_delay(0, Some("999")), Duration::from_secs(15));
+        assert_eq!(gemini_retry_delay(0, Some("not-a-number")), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn provider_error_body_redacts_api_key_and_is_bounded() {
+        let body = format!(r#"{{"message":"bad key: secret-value","detail":"{}"}}"#, "x".repeat(5000));
+        let redacted = redact_provider_error_body(&body, "secret-value");
+        assert!(!redacted.contains("secret-value"));
+        assert!(redacted.contains("[REDACTED]"));
+        assert!(redacted.chars().count() <= 4096);
     }
 
     #[test]
