@@ -8,13 +8,14 @@ mod capture;
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::Write,
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{atomic::AtomicBool, Arc, Mutex},
+    thread,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,6 +103,14 @@ struct DependencyStatus {
 #[serde(rename_all = "camelCase")]
 struct DependencyReport {
     dependencies: Vec<DependencyStatus>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DependencyInstallEvent {
+    dependency_id: String,
+    stream: String,
+    line: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -279,23 +288,6 @@ fn resolve_project_dir(id: &str) -> Result<PathBuf, AppError> {
         ));
     }
     Ok(directory)
-}
-
-fn apt_installer_available() -> bool {
-    Path::new("/usr/bin/pkexec").is_file() && Path::new("/usr/bin/apt-get").is_file()
-}
-
-fn has_font_family(pattern: &str, expected: &str) -> bool {
-    Command::new("fc-match")
-        .args(["-f", "%{family}", pattern])
-        .output()
-        .map(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout)
-                    .to_lowercase()
-                    .contains(&expected.to_lowercase())
-        })
-        .unwrap_or(false)
 }
 
 fn apt_installer_available() -> bool {
@@ -578,6 +570,169 @@ fn dependency_report() -> DependencyReport {
             wayland_capture_status(),
         ],
     }
+}
+
+fn dependency_packages(dependency_id: &str) -> Option<&'static [&'static str]> {
+    match dependency_id {
+        "ffmpeg" => Some(&["ffmpeg"]),
+        "caption-fonts" => Some(&["fontconfig", "fonts-noto-core"]),
+        _ => None,
+    }
+}
+
+fn stream_dependency_pipe<R: Read + Send + 'static>(
+    reader: R,
+    app: AppHandle,
+    dependency_id: String,
+    stream: &'static str,
+    captured: Arc<Mutex<Vec<String>>>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            let Ok(line) = line else { break; };
+            if line.trim().is_empty() { continue; }
+            if let Ok(mut output) = captured.lock() {
+                output.push(line.clone());
+                if output.len() > 100 {
+                    output.remove(0);
+                }
+            }
+            let _ = app.emit("dependency-install-output", DependencyInstallEvent {
+                dependency_id: dependency_id.clone(),
+                stream: stream.to_string(),
+                line,
+            });
+        }
+    })
+}
+
+fn install_dependency_blocking(
+    dependency_id: &str,
+    app: AppHandle,
+) -> Result<DependencyReport, AppError> {
+    let packages = dependency_packages(dependency_id).ok_or_else(|| AppError::new(
+        "DEPENDENCY_NOT_SUPPORTED",
+        "Screenstory cannot install that dependency automatically.",
+    ))?;
+    let current = dependency_report();
+    if current.dependencies.iter().find(|item| item.id == dependency_id)
+        .is_some_and(|item| item.status == "available")
+    {
+        return Ok(current);
+    }
+    if !apt_installer_available() {
+        return Err(AppError::new(
+            "SYSTEM_INSTALLER_UNAVAILABLE",
+            "Automatic installation requires APT and the PolicyKit authorization service. Use your Software Manager, then recheck dependencies.",
+        ));
+    }
+
+    let _ = app.emit("dependency-install-output", DependencyInstallEvent {
+        dependency_id: dependency_id.to_string(),
+        stream: "status".to_string(),
+        line: format!("Requesting administrator approval to install: {}", packages.join(", ")),
+    });
+    let mut child = Command::new("/usr/bin/pkexec")
+        .arg("/usr/bin/apt-get")
+        .arg("install")
+        .arg("-y")
+        .arg("-o")
+        .arg("Dpkg::Use-Pty=0")
+        .args(packages)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|_| AppError::new(
+            "DEPENDENCY_INSTALL_FAILED",
+            "Could not start the system package installer. Check that a graphical authentication agent is running.",
+        ))?;
+
+    let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+    let stdout = child.stdout.take().ok_or_else(|| AppError::new(
+        "DEPENDENCY_INSTALL_FAILED",
+        "Could not read package manager output.",
+    ))?;
+    let stderr = child.stderr.take().ok_or_else(|| AppError::new(
+        "DEPENDENCY_INSTALL_FAILED",
+        "Could not read package manager errors.",
+    ))?;
+    let stdout_thread = stream_dependency_pipe(
+        stdout, app.clone(), dependency_id.to_string(), "stdout", captured.clone(),
+    );
+    let stderr_thread = stream_dependency_pipe(
+        stderr, app.clone(), dependency_id.to_string(), "stderr", captured.clone(),
+    );
+
+    let status = child.wait().map_err(|_| AppError::new(
+        "DEPENDENCY_INSTALL_FAILED",
+        "The system package manager stopped before reporting an exit status.",
+    ))?;
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+
+    if !status.success() {
+        let output = captured.lock()
+            .map(|lines| lines.iter().rev().take(5).cloned().collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | "))
+            .unwrap_or_default();
+        let lower = output.to_lowercase();
+        if status.code() == Some(126)
+            || status.code() == Some(127)
+            || lower.contains("not authorized")
+            || lower.contains("authentication agent")
+            || lower.contains("authorization was cancelled")
+        {
+            return Err(AppError::new(
+                "DEPENDENCY_INSTALL_CANCELLED",
+                "System installation was cancelled or could not be authorized. Screenstory is still open; approve the system prompt or use your Software Manager.",
+            ));
+        }
+        if lower.contains("could not get lock")
+            || lower.contains("unable to acquire the dpkg frontend lock")
+        {
+            return Err(AppError::new(
+                "PACKAGE_MANAGER_BUSY",
+                "Another package manager is running. Close Software Manager or wait for system updates to finish, then retry.",
+            ));
+        }
+        return Err(AppError::new(
+            "DEPENDENCY_INSTALL_FAILED",
+            if output.is_empty() {
+                "The system package manager could not install the requested dependency. Check your network connection and APT repositories.".to_string()
+            } else {
+                format!("The system package manager could not finish installation: {output}")
+            },
+        ));
+    }
+
+    let updated = dependency_report();
+    if updated.dependencies.iter().find(|item| item.id == dependency_id)
+        .is_some_and(|item| item.status == "available")
+    {
+        let _ = app.emit("dependency-install-output", DependencyInstallEvent {
+            dependency_id: dependency_id.to_string(),
+            stream: "status".to_string(),
+            line: "Installation verified successfully.".to_string(),
+        });
+        Ok(updated)
+    } else {
+        Err(AppError::new(
+            "DEPENDENCY_INSTALL_UNVERIFIED",
+            "The package manager finished, but the requested capability is still unavailable. Recheck the package installation and the FFmpeg build features.",
+        ))
+    }
+}
+
+#[tauri::command]
+async fn install_dependency(
+    dependency_id: String,
+    app: AppHandle,
+) -> Result<DependencyReport, AppError> {
+    tauri::async_runtime::spawn_blocking(move || install_dependency_blocking(&dependency_id, app))
+        .await
+        .map_err(|_| AppError::new(
+            "DEPENDENCY_INSTALL_FAILED",
+            "The system dependency installation task could not be completed.",
+        ))?
 }
 
 #[cfg(test)]
