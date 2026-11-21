@@ -2,7 +2,7 @@
 
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
-**Status:** Architecture stack approved; desktop foundation not yet implemented.
+**Status:** Production desktop stack accepted; M1 foundation specification is the next gate.
 
 ## Approved product scope
 
@@ -30,23 +30,25 @@
 - Windows/macOS support.
 - Cloud project storage.
 - PDF export.
-- Python worker/runtime integration unless a later approved decision justifies it.
+- Mandatory Python backend/worker (ADR-010).
 
 ## Approved architecture
 
-ADR-002 selects Tauri v2 + React + TypeScript + Rust for the production desktop application. FFmpeg remains the video processing/encoding tool. SQLite + filesystem remain the persistence direction.
+ADR-001 selects Tauri v2 + React + TypeScript + Rust for the production desktop application. ADR-010 confirms that a Python backend is not required for the MVP. FFmpeg remains the video processing/encoding tool. SQLite + filesystem remain the persistence direction.
 
 The Python/Tkinter recorder remains a prototype and behavioral reference until the Tauri application passes equivalent capture acceptance tests. It is not the production architecture.
 
 ## Current milestone
 
-**M1 — Desktop Foundation (specification and environment validation).**
+**M1 — Desktop Foundation.**
 
-M1 begins with:
-1. Confirming Tauri v2 prerequisites and compatibility on the actual Linux Mint target.
-2. Defining the Tauri command boundary, UI/native-core responsibilities, and project workspace bootstrap.
-3. Creating the application shell and a minimal project dashboard.
-4. Establishing automated build/test checks and a repeatable development workflow.
+The next step is to approve a detailed foundation specification covering:
+1. Tauri v2 project structure and build prerequisites.
+2. React presentation and Rust application-core boundaries.
+3. Narrow Tauri command contracts and capability policy.
+4. Minimal application shell and project dashboard.
+5. Project workspace bootstrap and persistence boundary.
+6. Build, test, and verification workflow.
 
 No production capture port is authorized merely by creating the shell. Capture remains governed by SPEC-002 and must be integrated behind the unified adapter contract.
 
@@ -61,11 +63,11 @@ No production capture port is authorized merely by creating the shell. Capture r
 
 ## Next actions
 
-1. Create the M1 detailed specification for the Tauri application foundation.
+1. Finalize and approve the M1 desktop foundation specification.
 2. Verify Tauri v2 Linux prerequisites, especially WebKitGTK 4.1 compatibility on the actual target OS.
-3. Define project bootstrap, frontend/native command contracts, error model, and capability policy.
-4. Scaffold Tauri v2 + React + TypeScript + Rust only after the M1 foundation specification is approved.
-5. Keep capture integration behind the platform adapter interface; revise SPEC-002 based on the prototype evidence before production capture work.
+3. Scaffold Tauri v2 + React + TypeScript + Rust after the foundation specification is approved.
+4. Establish the project workspace and narrow native command boundary.
+5. Keep capture integration behind the platform adapter interface; production capture work remains governed by SPEC-002.
 6. Continue frame extraction, timeline schema, AI contract, and privacy specifications in their dependency order.
 
 ## Active implementation task
