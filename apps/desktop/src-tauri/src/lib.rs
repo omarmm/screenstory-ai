@@ -141,7 +141,7 @@ fn install_ffmpeg() -> InstallResult {
             .dependencies
             .first()
             .is_some_and(|item| item.status == "available");
-        return InstallResult {
+        InstallResult {
             success,
             message: if success {
                 "FFmpeg is installed and verified.".into()
