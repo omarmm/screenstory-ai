@@ -28,9 +28,9 @@ Add editable zoom segments and text annotations to the versioned timeline withou
 - Time range must be inside the source duration.
 - Font size 12–72 logical pixels.
 - Default Arabic direction RTL; default English LTR; mixed defaults auto. User can override direction and alignment.
-- Render text with Pango/Cairo or a proven shaping-capable renderer; never assume a font or shaping result is available.
-- Provide font fallback with Noto Naskh Arabic / Noto Sans Arabic where installed; report missing glyph/font availability rather than silently replacing characters.
-- Preview and export must use the same layout and font-shaping pipeline.
+- M5 persists annotation content, direction, alignment, geometry, colors, and font size only. It does not render annotation glyphs into video.
+- Arabic/English shaping and font availability are a mandatory M6 renderer proof before preview/export can be enabled. M6 must use Pango/Cairo or another verified shaping-capable renderer, include explicit font fallback (Noto Naskh Arabic / Noto Sans Arabic where installed), and report missing glyph/font availability rather than silently replacing characters.
+- Preview and export must use the same verified layout and font-shaping pipeline.
 
 ## 4. Persistence
 
@@ -54,11 +54,11 @@ Add editable zoom segments and text annotations to the versioned timeline withou
 2. Pending/rejected suggestions are never used by preview/export.
 3. Manual zooms and accepted AI zooms persist across restart.
 4. Invalid time, geometry, scale or overlapping active segments are rejected.
-5. User can create/edit/delete annotations with Arabic and English content.
-6. RTL/LTR shaping and glyph availability are verified on supported Linux targets.
-7. Timeline schema v1 migrates to v2 without altering old snapshots.
-8. Save conflicts cannot overwrite a newer revision.
-9. Preview and export consume the exact same approved composition model.
+5. User can create/edit/delete annotations with Arabic and English content; direction and alignment metadata persist through timeline revisions.
+6. Timeline schema v1 migrates to v2 without altering old snapshots.
+7. Save conflicts cannot overwrite a newer revision.
+8. Pending/rejected zoom suggestions remain distinguishable from active zooms in persisted timeline data.
+9. M6 cannot enable annotation preview/export until Arabic/English shaping and font fallback have passed a Linux target proof; preview and export must then consume the same approved composition model.
 
 ## 7. Out of scope
 
