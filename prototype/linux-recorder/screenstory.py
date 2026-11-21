@@ -314,9 +314,15 @@ class ScreenstoryRecorder:
 
             if window:
                 helper = self.build_capture_helper()
+                self.log_handle.write(
+                    f"Screenstory window capture\\nWindow ID: {window[0]}\\n"
+                    f"Requested output: {width}x{height}\\n"
+                    f"Started: {dt.datetime.now().isoformat()}\\n"
+                )
+                self.log_handle.flush()
                 self.capture_process = subprocess.Popen(
-                    [str(helper), window[0]], stdout=subprocess.PIPE,
-                    stderr=self.log_handle, bufsize=0
+                    [str(helper), window[0], str(width), str(height)],
+                    stdout=subprocess.PIPE, stderr=self.log_handle, bufsize=0
                 )
                 command = [
                     "ffmpeg", "-hide_banner", "-y", "-loglevel", "warning",
