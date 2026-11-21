@@ -746,7 +746,7 @@ pub fn run() {
                     let _ = session.stdin.flush();
                     let _ = session.child.wait();
                 }
-            }
+            };
         }
     });
 }
