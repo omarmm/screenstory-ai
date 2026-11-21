@@ -650,7 +650,7 @@ export default function App() {
                 <section className="analysis-progress-card">
                   <div className="section-heading"><div><span className="eyebrow">ANALYSIS RUN</span><h2>{activeAnalysis.sourceFileName}</h2></div><span className={"analysis-status-pill " + activeAnalysis.status}>{activeAnalysis.status.replaceAll("_", " ")}</span></div>
                   {activeAnalysis.status === "extracting_frames" && <>
-                    <p>Preparing representative frames locally. The original MP4 stays on this device.</p>
+                    <p>Preparing up to 30 representative frames locally (roughly one per second). The original MP4 stays on this device.</p>
                     <div className="progress-track"><span style={{ width: activeAnalysis.totalFrames ? (activeAnalysis.completedFrames / activeAnalysis.totalFrames * 100) + "%" : "4%" }} /></div>
                     <small>{activeAnalysis.completedFrames} / {activeAnalysis.totalFrames || "…"} frames extracted</small>
                   </>}
@@ -671,7 +671,10 @@ export default function App() {
                     <div className="analysis-actions"><button className="primary-button" onClick={() => void createEditableTimeline()} disabled={timelineBusy || timeline !== null}>Create editable timeline</button><small>Creates a separate versioned timeline. The AI draft and source video are untouched.</small></div>
                     <small>This draft is not approved for rendering and does not overwrite your original recording.</small>
                   </>}
-                  {activeAnalysis.status === "failed" && <div className="inline-warning">Analysis failed ({activeAnalysis.errorCode ?? "unknown error"}). Your original recording is unchanged. You can start another run.</div>}
+                  {activeAnalysis.status === "failed" && <div className="inline-warning">
+                    Analysis failed ({activeAnalysis.errorCode ?? "unknown error"}). Your original recording is unchanged. You can start another run.
+                    {activeAnalysis.errorCode === "GEMINI_SERVER_ERROR" && activeProject && <p>Google returned a server-side error after automatic retries. Diagnostic response details (with the API key redacted) are saved locally at <code>~/Videos/Screenstory/Projects/{activeProject.id}/analysis/{activeAnalysis.runId}/provider-errors.jsonl</code>. Share that file for diagnosis; never share your API key.</p>}
+                  </div>}
                   {activeAnalysis.status === "cancelled" && <p>Analysis cancelled. Your original recording is unchanged.</p>}
                 </section>
               )}
