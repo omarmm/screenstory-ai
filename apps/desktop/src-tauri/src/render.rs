@@ -135,20 +135,32 @@ fn ensure_render_table(project_dir: &Path) -> Result<(), AppError> {
 
 
 fn render_status_from_row(row: &Row<'_>) -> rusqlite::Result<RenderStatus> {
-    let status: String = row.get(4)?;
+    let mut status: String = row.get(4)?;
     let path: String = row.get(7)?;
+    let mut error_code: Option<String> = row.get(10)?;
+    let output_path = if status == "completed" {
+        if Path::new(&path).is_file() {
+            Some(path)
+        } else {
+            status = "missing".to_string();
+            error_code = Some("EXPORT_OUTPUT_MISSING".to_string());
+            None
+        }
+    } else {
+        None
+    };
     Ok(RenderStatus {
         run_id: row.get(0)?,
         recording_id: row.get(1)?,
         timeline_id: row.get(2)?,
         timeline_revision: row.get::<_, i64>(3)?.max(0) as u64,
-        status: status.clone(),
+        status,
         progress: row.get::<_, i64>(5)?.clamp(0, 100) as u8,
         output_file_name: row.get(6)?,
-        output_path: if status == "completed" && Path::new(&path).is_file() { Some(path) } else { None },
+        output_path,
         output_size_bytes: row.get::<_, i64>(8)?.max(0) as u64,
         duration_seconds: row.get(9)?,
-        error_code: row.get(10)?,
+        error_code,
         renderer_version: row.get(11)?,
         has_audio: row.get::<_, i64>(12)? != 0,
         annotation_count: row.get::<_, i64>(13)?.max(0) as usize,

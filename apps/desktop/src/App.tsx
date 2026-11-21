@@ -153,7 +153,7 @@ export default function App() {
   }, [activeAnalysis?.runId, activeAnalysis?.status, analysisDraft]);
 
   useEffect(() => {
-    if (!renderStatus?.runId || ["completed", "failed", "cancelled"].includes(renderStatus.status)) return;
+    if (!renderStatus?.runId || ["completed", "failed", "cancelled", "interrupted", "missing"].includes(renderStatus.status)) return;
     const runId = renderStatus.runId;
     const timer = window.setInterval(() => {
       void invoke<RenderStatus>("get_render_status", { runId })
@@ -420,7 +420,7 @@ export default function App() {
     finally { setRenderBusy(false); }
   }
   async function cancelExport() {
-    if (!renderStatus || ["completed", "failed", "cancelled"].includes(renderStatus.status)) return;
+    if (!renderStatus || ["completed", "failed", "cancelled", "interrupted", "missing"].includes(renderStatus.status)) return;
     setRenderBusy(true);
     try {
       await invoke("cancel_render", { runId: renderStatus.runId });
@@ -582,7 +582,7 @@ export default function App() {
                     <button className="secondary-button" onClick={() => void reloadTimeline()} disabled={timelineBusy}>Reload latest</button>
                     <button className="secondary-button" onClick={sortTimelineSteps} disabled={timelineBusy}>Sort by start time</button>
                     <button className="primary-button" onClick={() => void saveTimeline()} disabled={timelineBusy}>{timelineBusy ? "Saving…" : "Save revision"}</button>
-                    <button className="primary-button export-button" onClick={() => void startExport()} disabled={timelineBusy || renderBusy || timelineDirty || capture.isRecording || (!!renderStatus && !["completed", "failed", "cancelled"].includes(renderStatus.status))}>{renderBusy ? "Preparing…" : "Export MP4"}</button>
+                    <button className="primary-button export-button" onClick={() => void startExport()} disabled={timelineBusy || renderBusy || timelineDirty || capture.isRecording || (!!renderStatus && !["completed", "failed", "cancelled", "interrupted", "missing"].includes(renderStatus.status))}>{renderBusy ? "Preparing…" : "Export MP4"}</button>
                   </div>
                   <div className="timeline-step-list">
                     {timeline.steps.map((step, index) => (
@@ -667,11 +667,11 @@ export default function App() {
                           <span className={"analysis-status-pill " + renderStatus.status}>{renderStatus.status.replaceAll("_", " ")}</span>
                         </div>
                         <div className="progress-track"><span style={{ width: renderStatus.progress + "%" }} /></div>
-                        <small>{renderStatus.status === "completed" ? "Export verified · " + (renderStatus.outputSizeBytes / (1024 * 1024)).toFixed(1) + " MiB" : renderStatus.status === "failed" ? "Export failed · " + (renderStatus.errorCode ?? "unknown error") : renderStatus.status === "cancelled" ? "Export cancelled. No partial MP4 was kept." : renderStatus.progress + "% · Processing source video"}</small>
+                        <small>{renderStatus.status === "completed" ? "Export verified · " + (renderStatus.outputSizeBytes / (1024 * 1024)).toFixed(1) + " MiB" : renderStatus.status === "failed" ? "Export failed · " + (renderStatus.errorCode ?? "unknown error") : renderStatus.status === "cancelled" ? "Export cancelled. No partial MP4 was kept." : renderStatus.status === "interrupted" ? "Screenstory closed during export. The partial MP4 was removed; your source and timeline are safe." : renderStatus.status === "missing" ? "The export file is no longer present. You can render this saved revision again." : renderStatus.progress + "% · Processing source video"}</small>
                         {renderStatus.status === "completed" && renderStatus.outputPath && <div className="export-result"><strong>Your tutorial is ready</strong><p>{renderStatus.outputPath}</p><span>{renderStatus.activeZoomCount} zoom effects · {renderStatus.annotationCount} captions · {renderStatus.hasAudio ? "source audio preserved" : "no source audio"}</span>
                           <video className="tutorial-preview" controls preload="metadata" src={convertFileSrc(renderStatus.outputPath)} />
                         </div>}
-                        {!["completed", "failed", "cancelled"].includes(renderStatus.status) && <div className="analysis-actions"><button className="secondary-button compact" onClick={() => void cancelExport()} disabled={renderBusy}>Cancel export</button></div>}
+                        {!["completed", "failed", "cancelled", "interrupted", "missing"].includes(renderStatus.status) && <div className="analysis-actions"><button className="secondary-button compact" onClick={() => void cancelExport()} disabled={renderBusy}>Cancel export</button></div>}
                       </section>
                     )}
 
@@ -699,7 +699,7 @@ export default function App() {
               <section className="recordings-card"><div className="section-heading"><div><span className="eyebrow">PROJECT LIBRARY</span><h2>Recordings</h2></div><span className="count-pill">{recordings.length}</span></div>
                 {recordings.length === 0 ? <div className="recordings-empty"><span className="empty-video-icon">▹</span><strong>No recordings yet</strong><p>Your saved desktop recordings will appear here.</p></div>
                   : <div className="recording-list">{recordings.map((recording) => <div className="recording-row" key={recording.id}>
-                    <div className="recording-file-icon">MP4</div><div className="recording-details"><strong>{recording.fileName}</strong><span>{formatDate(recording.createdAt)} · {formatDuration(recording.durationSeconds)}</span></div><button className="secondary-button compact" onClick={() => void openTimeline(recording)} disabled={timelineBusy}>Open timeline</button><button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || capture.isRecording || !ffmpeg || ffmpeg.status !== "available" || (activeAnalysis !== null && !["completed", "failed", "cancelled"].includes(activeAnalysis.status))}>Analyze</button><span className="saved-label">SAVED</span>
+                    <div className="recording-file-icon">MP4</div><div className="recording-details"><strong>{recording.fileName}</strong><span>{formatDate(recording.createdAt)} · {formatDuration(recording.durationSeconds)}</span></div><button className="secondary-button compact" onClick={() => void openTimeline(recording)} disabled={timelineBusy}>Open timeline</button><button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || capture.isRecording || !ffmpeg || ffmpeg.status !== "available" || (activeAnalysis !== null && !["completed", "failed", "cancelled", "interrupted", "missing"].includes(activeAnalysis.status))}>Analyze</button><span className="saved-label">SAVED</span>
                   </div>)}</div>}
               </section>
             </div>
