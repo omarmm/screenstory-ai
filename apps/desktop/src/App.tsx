@@ -8,7 +8,7 @@ type DependencyReport = { dependencies: Dependency[] };
 type Project = { id: string; name: string; createdAt: string; updatedAt: string; recordingsCount: number };
 type Recording = {
   id: string; fileName: string; createdAt: string; durationSeconds: number;
-  captureBackend?: string; captureSourceType?: string; captureSourceName?: string;
+  captureBackend?: string; captureSourceType?: string; captureSourceName?: string; hasTimeline: boolean;
 };
 type CaptureSource = {
   id: string; name: string; sourceType: "display" | "window"; backend: string;
@@ -230,6 +230,50 @@ export default function App() {
     } catch (reason) { setError(friendlyError(reason)); }
     finally { setBusy(false); }
   }
+  async function deleteProject(project: Project) {
+    const approved = window.confirm(
+      "Permanently delete project “" + project.name + "”? This removes its recordings, sampled frames, analyses, timelines, and exported videos. This cannot be undone."
+    );
+    if (!approved) return;
+    setBusy(true); setError(null);
+    try {
+      await invoke("delete_project", { projectId: project.id });
+      if (activeProject?.id === project.id) {
+        setActiveProject(null);
+        setRecordings([]);
+        setActiveAnalysis(null);
+        setAnalysisDraft(null);
+        setTimeline(null);
+        setSavedTimelineSignature(null);
+        setRenderStatus(null);
+      }
+      await refreshProjects();
+      setNotice("Project “" + project.name + "” and its managed files were deleted.");
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setBusy(false); }
+  }
+  async function deleteRecording(recording: Recording) {
+    const approved = window.confirm(
+      "Permanently delete “" + recording.fileName + "”? This removes the original video, its AI analysis, editable timeline, and generated exports. This cannot be undone."
+    );
+    if (!approved) return;
+    setBusy(true); setError(null);
+    try {
+      await invoke("delete_recording", { recordingId: recording.id });
+      if (activeAnalysis?.recordingId === recording.id) {
+        setActiveAnalysis(null);
+        setAnalysisDraft(null);
+      }
+      if (timeline?.recordingId === recording.id) {
+        setTimeline(null);
+        setSavedTimelineSignature(null);
+      }
+      if (renderStatus?.recordingId === recording.id) setRenderStatus(null);
+      await refreshProjects();
+      setNotice("Recording “" + recording.fileName + "” and its managed data were deleted.");
+    } catch (reason) { setError(friendlyError(reason)); }
+    finally { setBusy(false); }
+  }
   async function saveGeminiKey() {
     setAnalysisBusy(true); setError(null);
     try {
@@ -299,20 +343,26 @@ export default function App() {
       const created = await invoke<TimelineDocument>("create_timeline_from_draft", { runId: activeAnalysis.runId });
       setTimeline(created);
       setSavedTimelineSignature(JSON.stringify(created));
+      setRecordings((current) => current.map((recording) => recording.id === created.recordingId ? { ...recording, hasTimeline: true } : recording));
       setRenderStatus(null);
       setNotice("Editable timeline created at revision " + created.revision + ". The AI draft and original recording remain unchanged.");
     } catch (reason) { setError(friendlyError(reason)); }
     finally { setTimelineBusy(false); }
   }
   async function openTimeline(recording: Recording) {
-    setTimelineBusy(true); setError(null);
+    if (!recording.hasTimeline) {
+      setNotice("This recording has no editable timeline yet. Run Gemini analysis successfully, then choose “Create editable timeline” from the completed draft.");
+      return;
+    }
+    setTimelineBusy(true); setError(null); setNotice(null);
     try {
       const opened = await invoke<TimelineDocument | null>("get_timeline_for_recording", { recordingId: recording.id });
       if (!opened) {
+        setRecordings((current) => current.map((item) => item.id === recording.id ? { ...item, hasTimeline: false } : item));
         setTimeline(null);
         setSavedTimelineSignature(null);
         setRenderStatus(null);
-        setNotice("No editable timeline exists for this recording yet. Complete an AI analysis and choose Create editable timeline.");
+        setNotice("The timeline index does not contain a saved timeline for this recording. Re-run analysis and create a new editable timeline.");
       } else {
         setTimeline(opened);
         setSavedTimelineSignature(JSON.stringify(opened));
@@ -518,10 +568,15 @@ export default function App() {
           <div className="project-list-heading">PROJECTS <span>{projects.length}</span></div>
           {projects.length === 0 && <p className="sidebar-empty">Your projects will appear here.</p>}
           {projects.map((project) => (
-            <button className={"project-nav " + (activeProject?.id === project.id ? "selected" : "")} key={project.id}
-              onClick={() => void openProject(project)} disabled={busy || capture.isRecording || renderInProgress} title={project.name}>
-              <span className="project-dot" /><span className="project-nav-name">{project.name}</span><span className="project-count">{project.recordingsCount}</span>
-            </button>
+            <div className="project-nav-row" key={project.id}>
+              <button className={"project-nav " + (activeProject?.id === project.id ? "selected" : "")}
+                onClick={() => void openProject(project)} disabled={busy || capture.isRecording || renderInProgress} title={project.name}>
+                <span className="project-dot" /><span className="project-nav-name">{project.name}</span><span className="project-count">{project.recordingsCount}</span>
+              </button>
+              <button className="icon-button danger-icon-button" onClick={() => void deleteProject(project)}
+                disabled={busy || capture.isRecording || renderInProgress} aria-label={"Delete project " + project.name}
+                title={"Delete project " + project.name}>×</button>
+            </div>
           ))}
           <div className="sidebar-bottom"><span className="local-indicator" />Stored on this device</div>
         </aside>
@@ -766,7 +821,14 @@ export default function App() {
               <section className="recordings-card"><div className="section-heading"><div><span className="eyebrow">PROJECT LIBRARY</span><h2>Recordings</h2></div><span className="count-pill">{recordings.length}</span></div>
                 {recordings.length === 0 ? <div className="recordings-empty"><span className="empty-video-icon">▹</span><strong>No recordings yet</strong><p>Your saved desktop recordings will appear here.</p></div>
                   : <div className="recording-list">{recordings.map((recording) => <div className="recording-row" key={recording.id}>
-                    <div className="recording-file-icon">MP4</div><div className="recording-details"><strong>{recording.fileName}</strong><span>{formatDate(recording.createdAt)} · {formatDuration(recording.durationSeconds)}{recording.captureSourceName ? " · " + recording.captureSourceName : ""}</span></div><button className="secondary-button compact" onClick={() => void openTimeline(recording)} disabled={timelineBusy}>Open timeline</button><button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || capture.isRecording || !ffmpeg || ffmpeg.status !== "available" || (activeAnalysis !== null && !["completed", "failed", "cancelled", "interrupted", "missing"].includes(activeAnalysis.status))}>Analyze</button><span className="saved-label">SAVED</span>
+                    <div className="recording-file-icon">MP4</div>
+                    <div className="recording-details"><strong>{recording.fileName}</strong><span>{formatDate(recording.createdAt)} · {formatDuration(recording.durationSeconds)}{recording.captureSourceName ? " · " + recording.captureSourceName : ""}</span></div>
+                    {recording.hasTimeline
+                      ? <button className="secondary-button compact" onClick={() => void openTimeline(recording)} disabled={timelineBusy || busy}>Open timeline</button>
+                      : <span className="timeline-missing" title="Run a successful Gemini analysis, then create an editable timeline from its draft.">No timeline yet</span>}
+                    <button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || busy || capture.isRecording || !ffmpeg || ffmpeg.status !== "available" || (activeAnalysis !== null && !["completed", "failed", "cancelled", "interrupted", "missing"].includes(activeAnalysis.status))}>Analyze</button>
+                    <button className="delete-recording-button" onClick={() => void deleteRecording(recording)} disabled={busy || capture.isRecording || renderInProgress} aria-label={"Delete recording " + recording.fileName} title="Delete recording and its related data">Delete</button>
+                    <span className="saved-label">SAVED</span>
                   </div>)}</div>}
               </section>
             </div>
