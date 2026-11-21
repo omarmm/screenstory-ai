@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import App from "./App";
 
 const invoke = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args), convertFileSrc: (path: string) => "asset://localhost/" + path.replace(/^\\//, "") }));
 
 const appInfo = { name: "Screenstory", version: "0.2.0", runtime: "Tauri" };
 const report = { dependencies: [{
