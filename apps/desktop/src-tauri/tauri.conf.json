@@ -4,9 +4,9 @@
   "version": "0.5.0",
   "identifier": "com.screenstory.desktop",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm tauri:icons && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm tauri:icons && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -39,6 +39,13 @@
     "category": "Utility",
     "shortDescription": "Turn screen recordings into clear tutorials",
     "longDescription": "A local-first desktop application for recording workflows and creating editable tutorials.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "linux": {
       "deb": {
         "depends": [
