@@ -210,3 +210,31 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .export-result p { color:#cbd7e7; font-size:10px; overflow-wrap:anywhere; line-height:1.5; }
 .export-result span { color:#8ac9b1; font-size:9px; }
 .export-button:disabled { opacity:.45; cursor:not-allowed; }
+
+
+.tutorial-preview {
+  display:block;
+  width:100%;
+  max-height:520px;
+  margin-top:16px;
+  border-radius:10px;
+  border:1px solid rgba(151,171,225,.2);
+  background:#050914;
+  object-fit:contain;
+}
+.export-result {
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  margin-top:15px;
+  min-width:0;
+}
+.export-result>p {
+  overflow-wrap:anywhere;
+  font-size:10px;
+  color:#9eadd0;
+}
+.export-result>span {
+  color:#8bdcbd;
+  font-size:9px;
+}
