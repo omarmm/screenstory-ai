@@ -10,7 +10,19 @@ const report = { dependencies: [{
   id: "ffmpeg", feature: "X11 desktop recording and video processing", status: "available",
   version: "ffmpeg version 6.1.1", impact: "Desktop recording is available.", canInstall: false, remediation: null,
 }] };
-const project = { id: "p12345-123", name: "Demo project", createdAt: "1730000000000", updatedAt: "1730000000000", recordingsCount: 0 };
+const project = { id: "p12345-123", name: "Demo project", createdAt: "1730000000000", updatedAt: "1730000000000", recordingsCount: 1 };
+const recording = { id: "recording-1", fileName: "recording-1.mp4", createdAt: "1730000000000", durationSeconds: 12 };
+const timeline = {
+  schemaVersion: 1, timelineId: "t12345-77", recordingId: "recording-1",
+  sourceFileName: "recording-1.mp4", sourceDurationMs: 12000, sourceAnalysisRunId: "a12345-77",
+  revision: 1, createdAtMs: 100, updatedAtMs: 100, status: "draft", language: "en",
+  steps: [{
+    id: "step-1", title: "Open settings", description: "Open the settings page.",
+    startMs: 0, endMs: 1000, origin: "ai", evidenceFrameIds: ["frame-000"],
+    confidence: 0.9, evidenceKind: "observed",
+  }],
+  zoomSegments: [], annotations: [],
+};
 
 function standard(command: string) {
   switch (command) {
@@ -21,6 +33,7 @@ function standard(command: string) {
     case "list_projects": return Promise.resolve([]);
     case "get_active_project": return Promise.resolve(null);
     case "list_recordings": return Promise.resolve([]);
+    case "get_timeline_for_recording": return Promise.resolve(null);
     case "create_project": return Promise.resolve(project);
     case "open_project": return Promise.resolve(project);
     case "start_recording": return Promise.resolve({ fileName: "recording-1.mp4", startedAtMs: Date.now() });
@@ -70,6 +83,27 @@ describe("Screenstory desktop application", () => {
     expect(await screen.findByRole("button", { name: /Stop & save/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Stop & save/ }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("stop_recording"));
+  });
+
+  it("opens, edits, and saves a versioned timeline revision", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_projects") return Promise.resolve([project]);
+      if (command === "get_active_project") return Promise.resolve(project);
+      if (command === "list_recordings") return Promise.resolve([recording]);
+      if (command === "get_timeline_for_recording") return Promise.resolve(timeline);
+      if (command === "save_timeline") return Promise.resolve({ ...timeline, revision: 2 });
+      return standard(command);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open timeline" }));
+    const titleInput = await screen.findByRole("textbox", { name: "Step title" });
+    fireEvent.change(titleInput, { target: { value: "Open account settings" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_timeline", {
+      timeline: { ...timeline, steps: [{ ...timeline.steps[0], title: "Open account settings" }] },
+      expectedRevision: 1,
+    }));
+    expect(await screen.findByText(/revision 2/)).toBeTruthy();
   });
 
   it("surfaces a native startup/storage error without crashing", async () => {
