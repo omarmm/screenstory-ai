@@ -2,7 +2,7 @@
 
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
-**Status:** Production desktop stack accepted; SPEC-017 drafted and awaiting review.
+**Status:** Production desktop stack accepted; SPEC-017 revised for automated dependency management and awaiting review.
 
 ## Approved product scope
 
@@ -42,13 +42,19 @@ The Python/Tkinter recorder remains a prototype and behavioral reference until t
 
 **M1 — Desktop Foundation.**
 
-Draft specification: SPEC-017 — Tauri Desktop Foundation. It covers the app shell, Rust command boundary, least-privilege capabilities, project workspace boundary, build prerequisites, and quality gates. It is not yet approved; no implementation task is Ready.
+SPEC-017 is a draft covering the app shell, Rust command boundary, least-privilege capabilities, automated runtime dependency checks, user-consented dependency installation, CI builds, and Linux packaging. It is awaiting review; no implementation task is Ready.
+
+Dependency policy:
+- Build-time toolchains and development headers belong in CI, not on end-user machines.
+- Mandatory libraries needed before the Tauri window can launch must be declared in package metadata and resolved by the OS package manager during installation.
+- Optional/feature runtime dependencies are checked by the app. Missing dependencies trigger a clear user-consent prompt; no package operation or privilege escalation occurs without explicit approval.
+- Linux Mint's primary distribution path is a .deb package. The generated package metadata must declare the Tauri runtime libraries it needs.
 
 Next gate:
 1. Review and approve SPEC-017.
-2. Verify Tauri v2 Linux prerequisites, especially WebKitGTK 4.1 compatibility on the actual Linux Mint target.
-3. Resolve the remaining M1 open decisions and define task handoffs.
-4. Scaffold Tauri v2 + React + TypeScript + Rust only after approval and environment readiness.
+2. Finalize frontend package manager and test tooling.
+3. Define the supported Linux Mint/Ubuntu baseline and package-manager adapter policy.
+4. Scaffold and build in CI; no manual environment-preparation task is assigned to the product owner.
 
 No production capture port is authorized merely by creating the shell. Capture remains governed by SPEC-002 and must be integrated behind the unified adapter contract.
 
@@ -67,13 +73,12 @@ None. No implementation task is currently Ready or In Progress.
 
 ## Blockers / open questions
 
-- Tauri v2 WebKitGTK 4.1 build prerequisites and compatibility with the installed Linux Mint version are not yet verified.
 - The production X11 window-capture backend is unresolved: current x11grab window capture has a resize limitation; the XComposite experiment produced black output.
 - Minimized/off-workspace X11 window behavior must be defined from evidence.
 - Wayland portal/PipeWire behavior remains unvalidated on a target compositor.
 - FFmpeg availability and required filter/font capabilities must be validated.
 - Gemini model selection, API limits, and current pricing must be verified at implementation time.
-- Packaging strategy (AppImage, deb, or both) remains open.
+- Minimum supported Linux Mint/Ubuntu base release and secondary packaging format remain to be finalized.
 
 ## Decision policy
 
