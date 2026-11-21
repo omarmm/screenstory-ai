@@ -1,7 +1,7 @@
 # ARCH-001 — System Architecture
 
 **Version:** 1.1  
-**Status:** Approved baseline — desktop stack decision recorded in ADR-002  
+**Status:** Approved baseline — desktop stack decision recorded in ADR-001  
 **Style:** Modular, local-first desktop application
 
 ## 1. Architecture goals
@@ -34,7 +34,7 @@ The working Tkinter/Python recorder is a prototype and behavioral reference, not
 
 ## 3. Technology decision
 
-ADR-002 records the selection of Tauri v2 + React + TypeScript + Rust. The decision is based on a rich editor UI, native Linux integration, a compiled native core, and a narrow permission-controlled bridge. It does not imply that Tauri itself provides screen capture or video processing.
+ADR-001 records the selection of Tauri v2 + React + TypeScript + Rust. The decision is based on a rich editor UI, native Linux integration, a compiled native core, and a narrow permission-controlled bridge. It does not imply that Tauri itself provides screen capture or video processing.
 
 Tauri v2 uses the platform webview. On Linux, development/build prerequisites include the Tauri-supported WebKitGTK 4.1 stack and native build dependencies. The exact compatibility of the target Linux Mint installation must be checked before committing to a local build workflow. This is a validation gate, not an assumption.
 

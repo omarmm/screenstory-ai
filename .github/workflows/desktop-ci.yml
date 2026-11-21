@@ -1,0 +1,81 @@
+name: Desktop CI
+
+on:
+  push:
+    paths:
+      - "apps/desktop/**"
+      - ".github/workflows/desktop-ci.yml"
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - ".github/workflows/desktop-ci.yml"
+  workflow_dispatch:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Type check
+        run: pnpm typecheck
+      - name: Unit tests
+        run: pnpm test
+      - name: Build frontend
+        run: pnpm build
+
+  linux-deb:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install Tauri Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl wget file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+      - name: Rust format check
+        run: cargo fmt --all -- --check
+      - name: Rust tests
+        run: cargo test
+      - name: Rust lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: pnpm install --no-frozen-lockfile
+      - name: Build Debian package
+        working-directory: apps/desktop
+        run: pnpm tauri build --bundles deb
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenstory-linux-deb
+          path: apps/desktop/src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
