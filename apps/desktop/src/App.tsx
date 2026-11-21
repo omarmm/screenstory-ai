@@ -917,7 +917,7 @@ export default function App() {
                     {recording.hasTimeline
                       ? <button className="secondary-button compact" onClick={() => void openTimeline(recording)} disabled={timelineBusy || busy}>Open timeline</button>
                       : <span className="timeline-missing" title="Run a successful Gemini analysis, then create an editable timeline from its draft.">No timeline yet</span>}
-                    <button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || busy || capture.isRecording || !ffmpeg || ffmpeg.status !== "available" || (activeAnalysis !== null && !["completed", "failed", "cancelled", "interrupted", "missing"].includes(activeAnalysis.status))}>Analyze</button>
+                    <button className="analysis-button" onClick={() => void startAnalysis(recording)} disabled={analysisBusy || busy || capture.isRecording || (activeAnalysis !== null && !["completed", "failed", "cancelled", "interrupted", "missing"].includes(activeAnalysis.status))}>Analyze</button>
                     <button className="delete-recording-button" onClick={() => void deleteRecording(recording)} disabled={busy || capture.isRecording || renderInProgress} aria-label={"Delete recording " + recording.fileName} title="Delete recording and its related data">Delete</button>
                     <span className="saved-label">SAVED</span>
                   </div>)}</div>}
