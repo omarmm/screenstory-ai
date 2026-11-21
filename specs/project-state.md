@@ -2,8 +2,8 @@
 
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
-**Current milestone:** M4 — versioned timeline and step editor  
-**Status:** M4 implementation passed CI and a Debian package has been produced. Target-device smoke testing and a real Gemini request are still pending. This is a verified development build, not a completed MVP release.
+**Current milestone:** M6 — video preview and MP4 tutorial export  
+**Status:** M1–M5 implementation is committed. M5 passed full CI and produced a Debian artifact. Version 0.4.0 package build is running after the version bump. Target-device smoke testing and a real Gemini request are still pending. This is a verified development build, not a completed MVP release.
 
 ## Product scope
 
@@ -73,27 +73,54 @@ Implemented:
 
 Verification:
 - Rust timeline validation tests passed in CI run `44942407655`.
-- Latest CI run `44943033679` passed frontend typecheck, unit tests (including the timeline edit/save path), frontend build, Tauri asset validation, Rust tests, Rust formatting, Clippy, Debian build and package metadata verification.
-- Artifact `screenstory-linux-deb`, ID `14722368387`, SHA-256 `3ca901e8a290aaeeba1a776642aa254004ff9fd320d50ccb351e6855769c3655`.
-- Built package metadata: `screenstory 0.3.0 amd64`, dependencies include WebKitGTK 4.1, GTK 3 and D-Bus.
+- CI run `44943033679` passed frontend typecheck/unit tests/build, Rust tests/format/Clippy, Debian build and metadata verification.
+- Artifact ID `14722368387`, package `screenstory 0.3.0 amd64`.
 - Target-device persistence and real workflow testing remain pending.
 
-## Approved next specifications
+## M5 — Hybrid zoom and bilingual annotation editing
 
-- M5: `specs/timeline/SPEC-021-hybrid-zoom-and-annotations.md` — accept/reject/edit zooms, manual zoom, bilingual RTL/LTR annotations and versioned timeline schema migration. Approved for implementation after M4 validation.
-- M6: `specs/rendering/SPEC-022-video-preview-and-mp4-export.md` — draft; implementation gated by M5 approval and a renderer proof.
+Approved specification: `specs/timeline/SPEC-021-hybrid-zoom-and-annotations.md`.
+
+Implemented:
+- Timeline schema v2 with atomic migration from v1 snapshots to new immutable revisions; prior snapshots remain intact.
+- AI zoom suggestions remain pending until explicit acceptance; users can accept/reject/reset and edit timing, normalized region, scale and transition duration.
+- Users can add/remove manual zooms.
+- Active zoom overlaps are rejected; pending/rejected AI suggestions are not considered active.
+- Users can add/edit/remove Arabic, English, or mixed-language captions; set timing, direction, alignment, normalized position/width, font size, foreground and background.
+- Rust validates caption text, allowed control characters, colors, language, timing, geometry, direction and alignment.
+- UI saves edits as versioned timeline revisions. No original recording or analysis draft is mutated.
+- M5 deliberately covers editing/persistence only. It does not yet composite zoom or caption overlays into video. Arabic shaping/glyph/font validation remains a mandatory renderer proof in M6, not claimed complete here.
+
+Verification:
+- CI run `44943760023` passed frontend and Linux Debian jobs, including Rust format, tests, Clippy, package build, metadata verification and upload.
+- Artifact ID `14723146076`; SHA-256 `ba09e5fe1ced791c61c13de1f67d22005d8a9583872b94ecb69c9c5641ab6dde`.
+- Artifact was downloaded and inspected: package `screenstory 0.3.0 amd64`, size 6,014,624 bytes.
+- A further UI test covering accept-zoom and Arabic caption save was added after that run and is included in the 0.4.0 build workflow.
+- Target-device RTL shaping and persisted edit behavior remain pending.
+
+## M6 — Video preview and MP4 tutorial export
+
+Specification: `specs/rendering/SPEC-022-video-preview-and-mp4-export.md` (draft; renderer proof and implementation remain).
+
+Required:
+- Immutable render plan bound to a saved timeline revision.
+- Preview and export share the exact same plan.
+- Compose only accepted/manual zooms; exclude pending/rejected AI suggestions.
+- Shape Arabic/English captions and verify installed fonts before enabling text rendering.
+- Preserve source audio when present.
+- FFmpeg child process with progress, cancellation, bounded resource use, temporary output, ffprobe validation and atomic finalization.
+- Export history tied to source recording and timeline revision.
 
 ## Remaining milestones
 
-1. Target-device verification of M2–M4 on supported Linux Mint: record, play MP4, restart app, inspect timeline, and run a real Gemini analysis with a user-provided key.
-2. M5 — hybrid zoom editing, Arabic/English annotations, shaping and schema migration.
-3. M6 — source/composited preview, deterministic MP4 rendering/export, audio preservation and output verification.
-4. M7 — selected-window recording and Wayland XDG portal/PipeWire capture adapters.
-5. M8 — complete user-consented FFmpeg dependency installer with real progress, Linux Mint compatibility matrix, recovery/security/licensing/packaging/release hardening.
+1. M6 — complete the renderer proof, composited preview, deterministic MP4 export, audio preservation and output verification.
+2. M7 — selected-window recording and Wayland XDG portal/PipeWire capture adapters.
+3. M8 — complete the user-consented FFmpeg dependency installer with real progress, Linux Mint compatibility matrix, recovery/security/licensing/packaging/release hardening.
+4. Target-device validation on Linux Mint for capture, persisted projects/timelines, Gemini, RTL shaping, and export.
 
 ## Deferred
 
-Windows/macOS, live AI, audio transcription, voice-over, cloud project storage, full-source video uploads to providers, webcam capture and PDF export.
+Windows/macOS, live AI, speech transcription, voice-over, cloud project storage, full-source video uploads to providers, webcam capture and PDF export.
 
 ## Release verification policy
 
