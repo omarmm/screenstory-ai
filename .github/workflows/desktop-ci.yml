@@ -79,6 +79,15 @@ jobs:
       - name: Build Debian package
         working-directory: apps/desktop
         run: pnpm tauri build --bundles deb
+      - name: Verify Debian package metadata
+        working-directory: apps/desktop/src-tauri
+        run: |
+          package="$(find target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit)"
+          test -n "$package"
+          echo "Package: $(dpkg-deb -f "$package" Package)"
+          echo "Version: $(dpkg-deb -f "$package" Version)"
+          echo "Architecture: $(dpkg-deb -f "$package" Architecture)"
+          echo "Dependencies: $(dpkg-deb -f "$package" Depends)"
       - name: Upload Debian package
         uses: actions/upload-artifact@v4
         with:
