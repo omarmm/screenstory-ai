@@ -509,25 +509,19 @@ fn annotations_from_steps(
             } else {
                 "ltr"
             };
-            let (x, alignment) = if direction == "rtl" {
-                (0.08, "right")
-            } else {
-                (0.08, "left")
-            };
-
             Some(TimelineAnnotation {
                 id: format!("annotation-step-{}", index + 1),
                 text: text.to_string(),
                 language: language.to_string(),
                 start_ms: step.start_ms,
                 end_ms: step.end_ms,
-                x,
-                y: 0.82,
+                x: 0.5,
+                y: 0.86,
                 max_width: 0.84,
-                font_size: 26,
+                font_size: 40,
                 foreground: "#FFFFFF".to_string(),
-                background: "#000000CC".to_string(),
-                alignment: alignment.to_string(),
+                background: "#000000B3".to_string(),
+                alignment: "center".to_string(),
                 direction: direction.to_string(),
                 origin: "ai".to_string(),
             })
@@ -535,23 +529,52 @@ fn annotations_from_steps(
         .collect()
 }
 
+fn has_legacy_default_caption_style(annotation: &TimelineAnnotation) -> bool {
+    (annotation.x == 0.08 || annotation.x == 0.92)
+        && annotation.y == 0.82
+        && annotation.max_width == 0.84
+        && annotation.font_size == 26
+        && annotation.foreground == "#FFFFFF"
+        && annotation.background == "#000000CC"
+        && ((annotation.direction == "rtl" && annotation.alignment == "right")
+            || (annotation.direction != "rtl" && annotation.alignment == "left"))
+}
+
 fn ensure_automatic_captions(timeline: &mut TimelineDocument) -> bool {
-    if timeline.caption_generation_version >= 1 {
+    const CAPTION_STYLE_VERSION: u32 = 2;
+    if timeline.caption_generation_version >= CAPTION_STYLE_VERSION {
         return false;
     }
 
     let generated = annotations_from_steps(&timeline.steps, &timeline.language);
     for annotation in generated {
+        if let Some(existing) = timeline.annotations.iter_mut()
+            .find(|existing| existing.id == annotation.id)
+        {
+            // Upgrade only untouched captions created by the previous automatic style.
+            // Any user-customized caption keeps its own formatting and text.
+            if existing.origin == "ai" && has_legacy_default_caption_style(existing) {
+                existing.x = annotation.x;
+                existing.y = annotation.y;
+                existing.max_width = annotation.max_width;
+                existing.font_size = annotation.font_size;
+                existing.foreground = annotation.foreground;
+                existing.background = annotation.background;
+                existing.alignment = annotation.alignment;
+                existing.direction = annotation.direction;
+            }
+            continue;
+        }
+
         let already_covered = timeline.annotations.iter().any(|existing| {
-            existing.id == annotation.id
-                || (existing.start_ms == annotation.start_ms
-                    && existing.end_ms == annotation.end_ms)
+            existing.start_ms == annotation.start_ms
+                && existing.end_ms == annotation.end_ms
         });
         if !already_covered {
             timeline.annotations.push(annotation);
         }
     }
-    timeline.caption_generation_version = 1;
+    timeline.caption_generation_version = CAPTION_STYLE_VERSION;
     true
 }
 
@@ -947,7 +970,7 @@ mod tests {
         });
 
         assert!(ensure_automatic_captions(&mut timeline));
-        assert_eq!(timeline.caption_generation_version, 1);
+        assert_eq!(timeline.caption_generation_version, 2);
         assert_eq!(timeline.annotations.len(), 2);
         assert_eq!(timeline.annotations[0].id, "manual-caption");
         assert_eq!(timeline.annotations[1].text, "Open settings");
@@ -956,6 +979,57 @@ mod tests {
         timeline.annotations.clear();
         assert!(!ensure_automatic_captions(&mut timeline));
         assert!(timeline.annotations.is_empty());
+    }
+
+    #[test]
+    fn legacy_generated_captions_upgrade_to_centered_large_subtitle_style() {
+        let mut timeline = example_timeline();
+        timeline.caption_generation_version = 1;
+        timeline.annotations.push(TimelineAnnotation {
+            id: "annotation-step-1".to_string(),
+            text: "افتح الإعدادات".to_string(),
+            language: "ar".to_string(),
+            start_ms: 0,
+            end_ms: 1000,
+            x: 0.08,
+            y: 0.82,
+            max_width: 0.84,
+            font_size: 26,
+            foreground: "#FFFFFF".to_string(),
+            background: "#000000CC".to_string(),
+            alignment: "right".to_string(),
+            direction: "rtl".to_string(),
+            origin: "ai".to_string(),
+        });
+
+        assert!(ensure_automatic_captions(&mut timeline));
+        let caption = &timeline.annotations[0];
+        assert_eq!(caption.text, "افتح الإعدادات");
+        assert_eq!(caption.start_ms, 0);
+        assert_eq!(caption.end_ms, 1000);
+        assert_eq!(caption.x, 0.5);
+        assert_eq!(caption.y, 0.86);
+        assert_eq!(caption.max_width, 0.84);
+        assert_eq!(caption.font_size, 40);
+        assert_eq!(caption.background, "#000000B3");
+        assert_eq!(caption.alignment, "center");
+        assert_eq!(caption.direction, "rtl");
+        assert_eq!(timeline.caption_generation_version, 2);
+    }
+
+    #[test]
+    fn customized_legacy_generated_caption_keeps_user_formatting() {
+        let mut timeline = example_timeline();
+        timeline.caption_generation_version = 1;
+        let mut caption = annotations_from_steps(&timeline.steps, "en").remove(0);
+        caption.font_size = 31;
+        caption.x = 0.22;
+        timeline.annotations.push(caption);
+
+        assert!(ensure_automatic_captions(&mut timeline));
+        assert_eq!(timeline.annotations[0].font_size, 31);
+        assert_eq!(timeline.annotations[0].x, 0.22);
+        assert_eq!(timeline.annotations[0].alignment, "center");
     }
 
     #[test]
