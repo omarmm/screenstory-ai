@@ -834,6 +834,7 @@ export default function App() {
                   </>}
                   {activeAnalysis.status === "completed" && analysisDraft && <>
                     <div className="draft-summary"><strong>AI draft ready for review</strong><p>{analysisDraft.summary}</p><div className="draft-counts"><span>{analysisDraft.steps.length} tutorial steps</span><span>{analysisDraft.zoomSuggestions.length} zoom suggestions</span></div></div>
+                    <small>Generated with Google Gemini · {activeAnalysis.model}</small>
                     <div className="draft-step-list">{analysisDraft.steps.map((step, index) => <article className="draft-step" key={step.id}><span className="draft-index">{String(index + 1).padStart(2, "0")}</span><div><strong>{step.title}</strong><p>{step.description}</p><small>{formatDuration(step.startMs / 1000)} – {formatDuration(step.endMs / 1000)} · {step.evidenceFrameIds.length} evidence frames · {step.evidenceKind}</small></div></article>)}</div>
                     <div className="analysis-actions"><button className="primary-button" onClick={() => void createEditableTimeline()} disabled={timelineBusy || timeline !== null}>Create editable timeline</button><small>Creates a separate versioned timeline. The AI draft and source video are untouched.</small></div>
                     <small>This draft is not approved for rendering and does not overwrite your original recording.</small>
@@ -843,7 +844,7 @@ export default function App() {
                     {activeAnalysis.errorCode === "GEMINI_SERVER_ERROR" && <p>Google Gemini is temporarily unavailable. Screenstory followed Google's Retry-After instruction, but Gemini remained unavailable after automatic retries. Your original recording is unchanged. Please try again later.</p>}
                     {activeAnalysis.errorCode === "GEMINI_RETRY_DEFERRED" && <p>Google requested a retry delay longer than Screenstory's 60-second automatic retry window, or sent a delay value Screenstory could not safely interpret. Screenstory stopped instead of retrying early. Please try again later.</p>}
                     {activeAnalysis.errorCode === "GEMINI_MODELS_UNAVAILABLE" && <p>Both the primary Gemini model and its approved fallback returned server errors after retries. The sampled frames remain in this project. Please try again later or choose another primary model.</p>}
-                    {["GEMINI_SERVER_ERROR", "GEMINI_RETRY_DEFERRED"].includes(activeAnalysis.errorCode ?? "") && activeProject && <p>Provider response details (with the API key redacted) are saved locally at <code>~/Videos/Screenstory/Projects/{activeProject.id}/analysis/{activeAnalysis.runId}/provider-errors.jsonl</code>. Share that file for diagnosis; never share your API key.</p>}
+                    {["GEMINI_SERVER_ERROR", "GEMINI_RETRY_DEFERRED", "GEMINI_MODELS_UNAVAILABLE"].includes(activeAnalysis.errorCode ?? "") && activeProject && <p>Provider response details (with the API key redacted) are saved locally at <code>~/Videos/Screenstory/Projects/{activeProject.id}/analysis/{activeAnalysis.runId}/provider-errors.jsonl</code>. Share that file for diagnosis; never share your API key.</p>}
                   </div>}
                   {activeAnalysis.status === "cancelled" && <p>Analysis cancelled. Your original recording is unchanged.</p>}
                 </section>

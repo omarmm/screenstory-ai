@@ -1291,6 +1291,34 @@ mod tests {
     }
 
     #[test]
+    fn project_gemini_settings_default_to_hydrogen_with_flash_fallback() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.execute_batch(
+            "CREATE TABLE gemini_model_settings (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                primary_model TEXT NOT NULL,
+                automatic_fallback INTEGER NOT NULL DEFAULT 1
+            );
+            INSERT INTO gemini_model_settings (id, primary_model, automatic_fallback)
+            VALUES (1, 'gemini-4-hydrogen', 1);"
+        ).unwrap();
+
+        let defaults = settings_from_connection(&connection).unwrap();
+        assert_eq!(defaults.primary_model, "gemini-4-hydrogen");
+        assert_eq!(defaults.fallback_model.as_deref(), Some("gemini-3.8-flash"));
+        assert!(defaults.automatic_fallback);
+
+        connection.execute(
+            "UPDATE gemini_model_settings SET primary_model=?1, automatic_fallback=0 WHERE id=1",
+            params!["gemini-3.8-flash"],
+        ).unwrap();
+        let saved = settings_from_connection(&connection).unwrap();
+        assert_eq!(saved.primary_model, "gemini-3.8-flash");
+        assert_eq!(saved.fallback_model, None);
+        assert!(!saved.automatic_fallback);
+    }
+
+    #[test]
     fn provider_error_body_redacts_api_key_and_is_bounded() {
         let body = format!(r#"{{"message":"bad key: secret-value","detail":"{}"}}"#, "x".repeat(5000));
         let redacted = redact_provider_error_body(&body, "secret-value");
