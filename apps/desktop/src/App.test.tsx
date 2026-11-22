@@ -350,8 +350,8 @@ describe("Screenstory desktop application", () => {
     fireEvent.change(screen.getByLabelText("All captions background color"), { target: { value: "#123456" } });
     fireEvent.change(screen.getByLabelText("All captions background opacity"), { target: { value: "55" } });
     fireEvent.click(screen.getByRole("button", { name: "Apply to all captions" }));
-    // Wait for React to commit the shared style update before invoking the save handler.
-    await waitFor(() => expect(saveRevisionButton).toBeEnabled());
+    // The unsaved-edits notice is derived from the timeline state, not the local style controls.
+    expect(await screen.findByText(/unsaved timeline edits/i)).toBeTruthy();
     fireEvent.click(saveRevisionButton);
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_timeline", expect.objectContaining({
