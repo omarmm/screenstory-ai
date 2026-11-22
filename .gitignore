@@ -24,3 +24,12 @@ src-tauri/target/
 *.wav
 *.sqlite
 *.db
+
+# Tauri generated files
+/apps/desktop/src-tauri/gen/
+
+/apps/desktop/src-tauri/icons/*.png
+/apps/desktop/src-tauri/icons/*.ico
+/apps/desktop/src-tauri/icons/*.icns
+/apps/desktop/src-tauri/icons/android/
+/apps/desktop/src-tauri/icons/ios/
