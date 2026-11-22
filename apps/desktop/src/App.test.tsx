@@ -338,6 +338,9 @@ describe("Screenstory desktop application", () => {
     await waitFor(() => expect(openTimelineButton.disabled).toBe(false));
     fireEvent.click(openTimelineButton);
     expect(await screen.findByLabelText("All captions font size")).toBeTruthy();
+    const saveRevisionButton = screen.getByRole("button", { name: "Save revision" });
+    // The editor appears before its asynchronous load handler clears timelineBusy.
+    await waitFor(() => expect(saveRevisionButton).toBeEnabled());
 
     expect(screen.getByLabelText("Caption 1 text color")).toBeTruthy();
     expect(screen.getByLabelText("Caption 2 background color")).toBeTruthy();
@@ -347,7 +350,9 @@ describe("Screenstory desktop application", () => {
     fireEvent.change(screen.getByLabelText("All captions background color"), { target: { value: "#123456" } });
     fireEvent.change(screen.getByLabelText("All captions background opacity"), { target: { value: "55" } });
     fireEvent.click(screen.getByRole("button", { name: "Apply to all captions" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
+    // Wait for React to commit the shared style update before invoking the save handler.
+    await waitFor(() => expect(saveRevisionButton).toBeEnabled());
+    fireEvent.click(saveRevisionButton);
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_timeline", expect.objectContaining({
       expectedRevision: 1,
