@@ -940,6 +940,7 @@ mod tests {
                 direction: "rtl".into(),
                 origin: "manual".into(),
             }],
+            caption_generation_version: 1,
         };
         let ass_path = root.join("captions.ass");
         fs::write(&ass_path, generate_ass(&doc, 320, 180).unwrap()).unwrap();
@@ -997,6 +998,7 @@ mod tests {
                 foreground: "#FFFFFF".into(), background: "#000000CC".into(), alignment: "right".into(),
                 direction: "rtl".into(), origin: "manual".into(),
             }],
+            caption_generation_version: 1,
         };
         let ass = generate_ass(&document, 1920, 1080).unwrap();
         assert!(ass.contains("PlayResX: 1920"));
