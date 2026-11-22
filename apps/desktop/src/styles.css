@@ -784,3 +784,54 @@ html[data-theme="light"] option:hover {
 .app-shell[data-theme="light"] textarea:focus-visible {
   outline-color:#5574dc;
 }
+
+/* Keep intentionally dark feature art and status accents readable in Light mode. */
+.app-shell[data-theme="light"] .hero-card { color:#f6f8ff; }
+.app-shell[data-theme="light"] .hero-copy h2 { color:#f6f8ff; }
+.app-shell[data-theme="light"] .hero-copy h2 span { color:#aebfff; }
+.app-shell[data-theme="light"] .hero-copy p { color:#c2cce1; }
+.app-shell[data-theme="light"] .recording-state { color:#52617a; background:#edf1f8; }
+.app-shell[data-theme="light"] .recording-state.live { color:#a72d45; background:#fff0f2; }
+.app-shell[data-theme="light"] .recording-details strong { color:#23334d; }
+.app-shell[data-theme="light"] .recording-details span { color:#65758f; }
+.app-shell[data-theme="light"] .saved-label { color:#26745d; }
+.app-shell[data-theme="light"] .recording-row { border-top-color:#e1e7f0; }
+.app-shell[data-theme="light"] .recording-file-icon,
+.app-shell[data-theme="light"] .empty-video-icon {
+  color:#4662bc;
+  background:#e8edff;
+}
+.app-shell[data-theme="light"] .dependency-warning {
+  background:#fff8e9;
+  border-color:#f0dfbd;
+}
+.app-shell[data-theme="light"] .dependency-warning strong { color:#805c20; }
+.app-shell[data-theme="light"] .dependency-warning p,
+.app-shell[data-theme="light"] .dependency-manual-hint { color:#685a42; }
+.app-shell[data-theme="light"] .dependency-install-progress {
+  background:#eff4ff;
+  border-color:#d4e0fb;
+}
+.app-shell[data-theme="light"] .dependency-install-progress strong { color:#253c72; }
+.app-shell[data-theme="light"] .dependency-install-progress p { color:#5d6e8d; }
+.app-shell[data-theme="light"] .dependency-install-progress pre {
+  color:#c9f2de;
+  background:#17243a;
+}
+.app-shell[data-theme="light"] .analysis-button {
+  color:#344d91;
+  background:#e9efff;
+  border-color:#cfdafa;
+}
+.app-shell[data-theme="light"] .analysis-status-pill,
+.app-shell[data-theme="light"] .credential-pill { color:#815b1b; background:#fff5df; }
+.app-shell[data-theme="light"] .analysis-status-pill.completed,
+.app-shell[data-theme="light"] .credential-pill.ready { color:#24694f; background:#e4f5ed; }
+.app-shell[data-theme="light"] .analysis-status-pill.extracting_frames,
+.app-shell[data-theme="light"] .analysis-status-pill.sending_to_provider { color:#405ca9; background:#e8eeff; }
+.app-shell[data-theme="light"] .timeline-origin.ai { color:#405ca9; background:#e8eeff; }
+.app-shell[data-theme="light"] .zoom-state.pending { color:#805d20; background:#fff4df; }
+.app-shell[data-theme="light"] .zoom-state.accepted { color:#24694f; background:#e4f5ed; }
+.app-shell[data-theme="light"] .zoom-state.rejected { color:#9e3448; background:#fff0f2; }
+.app-shell[data-theme="light"] .text-button { color:#a04456; }
+.app-shell[data-theme="light"] .statusbar .status-dot.ready { background:#25956c; }
