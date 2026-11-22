@@ -358,6 +358,13 @@ pub(super) fn validate_timeline(
                 && color.starts_with('#')
                 && color[1..].chars().all(|character| character.is_ascii_hexdigit())
         };
+        let horizontal_out_of_bounds = if annotation.alignment == "center" {
+            annotation.max_width > 1.0
+                || annotation.x < annotation.max_width / 2.0
+                || annotation.x > 1.0 - annotation.max_width / 2.0
+        } else {
+            annotation.x + annotation.max_width > 1.0
+        };
         if annotation.id.trim().is_empty()
             || annotation.id.len() > 128
             || !annotation_ids.insert(annotation.id.as_str())
@@ -373,7 +380,7 @@ pub(super) fn validate_timeline(
             || annotation.x < 0.0
             || annotation.y < 0.0
             || annotation.max_width <= 0.0
-            || annotation.x + annotation.max_width > 1.0
+            || horizontal_out_of_bounds
             || annotation.y >= 1.0
             || !(12..=72).contains(&annotation.font_size)
             || !valid_color(&annotation.foreground)
@@ -1090,6 +1097,34 @@ mod tests {
         timeline.zoom_segments[0].approval_status = "pending".to_string();
         timeline.zoom_segments[1].approval_status = "pending".to_string();
         assert!(validate_timeline(&timeline, &example_manifest()).is_ok());
+    }
+
+    #[test]
+    fn centered_subtitle_anchor_validates_using_its_center_and_safe_width() {
+        let mut timeline = example_timeline();
+        timeline.annotations.push(TimelineAnnotation {
+            id: "center-caption".to_string(),
+            text: "Centered subtitle".to_string(),
+            language: "en".to_string(),
+            start_ms: 0,
+            end_ms: 1000,
+            x: 0.5,
+            y: 0.92,
+            max_width: 0.84,
+            font_size: 44,
+            foreground: "#FFFFFF".to_string(),
+            background: "#000000B3".to_string(),
+            alignment: "center".to_string(),
+            direction: "ltr".to_string(),
+            origin: "ai".to_string(),
+        });
+        assert!(validate_timeline(&timeline, &example_manifest()).is_ok());
+
+        timeline.annotations[0].x = 0.4;
+        assert_eq!(
+            validate_timeline(&timeline, &example_manifest()).unwrap_err().code,
+            "TIMELINE_ANNOTATION_INVALID"
+        );
     }
 
     #[test]
