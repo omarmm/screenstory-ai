@@ -63,3 +63,17 @@ Add editable zoom segments and text annotations to the versioned timeline withou
 ## 7. Out of scope
 
 Video rendering implementation, speech transcription, voice-over, remote project sync, and Wayland recording.
+
+
+## Amendment — Automatic captions from AI tutorial steps
+
+**Decision:** Captions are generated automatically when a completed AI analysis draft is converted into its first editable timeline. No user action or separate generation button is required.
+
+- Create one editable AI-origin annotation from each non-empty AI tutorial-step title.
+- Copy the step's start and end timestamps exactly so the caption follows the corresponding step.
+- Detect Arabic and Latin script to choose the annotation language, writing direction, and alignment. Use the draft language only when the title contains no detectable letters.
+- Use a readable default caption placement and styling; all generated caption fields remain editable or removable in the timeline editor.
+- Preserve manual annotations as manual. AI-generated annotations are explicitly marked as AI-origin and are valid persisted timeline content.
+- Do not modify the immutable analysis draft or the source recording. Existing timelines are not silently rewritten; this behavior applies when a new timeline is created from a completed draft.
+
+This amendment makes the tutorial-step-to-on-screen-caption conversion part of the default timeline creation workflow. Export continues to render all valid saved annotations through the existing caption renderer.
