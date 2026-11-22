@@ -347,7 +347,7 @@ pub(super) fn ensure_analysis_table(project_dir: &Path) -> Result<(), AppError> 
             .map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The analysis run columns could not be read."))?
     };
     for (name, definition) in [
-        ("primary_model", "TEXT NOT NULL DEFAULT 'gemini-4-hydrogen'"),
+        ("primary_model", "TEXT NOT NULL DEFAULT 'gemini-3.6-flash'"),
         ("fallback_model", "TEXT"),
         ("automatic_fallback", "INTEGER NOT NULL DEFAULT 1"),
     ] {
