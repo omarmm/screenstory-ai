@@ -339,12 +339,19 @@ fn generate_ass(document: &timeline::TimelineDocument, width: u32, height: u32) 
     for item in annotations {
         let x = (item.x * width as f64).round() as u32;
         let y = (item.y * height as f64).round() as u32;
-        let left = (item.x * width as f64).round() as u32;
-        let right = ((1.0 - item.x - item.max_width) * width as f64).round() as u32;
+        let (left, right) = if item.alignment == "center" {
+            let margin = (((1.0 - item.max_width) / 2.0) * width as f64).round() as u32;
+            (margin, margin)
+        } else {
+            (
+                (item.x * width as f64).round() as u32,
+                ((1.0 - item.x - item.max_width) * width as f64).round() as u32,
+            )
+        };
         let font = if item.language == "en" { "Noto Sans" } else { "Noto Sans Arabic" };
         let foreground = ass_color(&item.foreground)?;
         let background = ass_color(&item.background)?;
-        let tags = format!("{{\\an{}\\pos({x},{y})\\fs{}\\fn{font}\\1c{foreground}\\4c{background}\\bord0\\shad0}}",
+        let tags = format!("{{\\an{}\\pos({x},{y})\\fs{}\\b1\\fn{font}\\1c{foreground}\\4c{background}\\bord10\\shad0}}",
             ass_alignment(&item.alignment), item.font_size);
         let text = escape_ass_text(&item.text, &item.direction);
         ass.push_str(&format!("Dialogue: 0,{},{},Default,,{left},{right},0,,{tags}{text}\n",
@@ -1005,5 +1012,7 @@ mod tests {
         assert!(ass.contains("Dialogue: 0,0:00:00.50,0:00:02.00"));
         assert!(ass.contains("اضغط على الإعدادات"));
         assert!(ass.contains("\\an9"));
+        assert!(ass.contains("\\b1"));
+        assert!(ass.contains("\\bord10"));
     }
 }
