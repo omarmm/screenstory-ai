@@ -20,8 +20,9 @@ use std::{
 };
 use tauri::State;
 
-const GEMINI_MODEL: &str = "gemini-4-hydrogen";
 const GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
+const GEMINI_MODEL_HYDROGEN: &str = "gemini-4-hydrogen";
+const GEMINI_MODEL_FLASH: &str = "gemini-3.8-flash";
 const MAX_FRAMES: usize = 30;
 const MAX_SUPPORTED_FRAMES: usize = 60;
 const MAX_INLINE_REQUEST_BYTES: usize = 12 * 1024 * 1024;
@@ -34,6 +35,10 @@ pub struct AnalysisStarted {
     run_id: String,
     recording_id: String,
     file_name: String,
+    model: String,
+    primary_model: String,
+    fallback_model: Option<String>,
+    automatic_fallback: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -49,6 +54,9 @@ pub struct AnalysisStatus {
     duration_seconds: Option<f64>,
     provider: String,
     model: String,
+    primary_model: String,
+    fallback_model: Option<String>,
+    automatic_fallback: bool,
     error_code: Option<String>,
     workflow_description: String,
     language: String,
@@ -157,6 +165,45 @@ pub struct GeminiKeyStatus {
     configured: bool,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiModelSettings {
+    primary_model: String,
+    fallback_model: Option<String>,
+    automatic_fallback: bool,
+}
+
+fn is_supported_gemini_model(model: &str) -> bool {
+    model == GEMINI_MODEL_HYDROGEN || model == GEMINI_MODEL_FLASH
+}
+
+fn alternate_gemini_model(model: &str) -> Option<&'static str> {
+    match model {
+        GEMINI_MODEL_HYDROGEN => Some(GEMINI_MODEL_FLASH),
+        GEMINI_MODEL_FLASH => Some(GEMINI_MODEL_HYDROGEN),
+        _ => None,
+    }
+}
+
+fn settings_from_connection(connection: &rusqlite::Connection) -> Result<GeminiModelSettings, AppError> {
+    let (primary_model, automatic_fallback): (String, i64) = connection.query_row(
+        "SELECT primary_model, automatic_fallback FROM gemini_model_settings WHERE id=1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).map_err(|_| AppError::new("GEMINI_SETTINGS_READ_FAILED", "Gemini model settings could not be read from this project."))?;
+
+    if !is_supported_gemini_model(&primary_model) {
+        return Err(AppError::new("GEMINI_MODEL_UNSUPPORTED", "This project stores an unsupported Gemini model. Choose a supported model in the Gemini settings."));
+    }
+    let automatic_fallback = automatic_fallback != 0;
+    let fallback_model = if automatic_fallback {
+        alternate_gemini_model(&primary_model).map(str::to_owned)
+    } else {
+        None
+    };
+    Ok(GeminiModelSettings { primary_model, fallback_model, automatic_fallback })
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -167,6 +214,39 @@ fn now_ms() -> u64 {
 fn keyring_entry() -> Result<Entry, AppError> {
     Entry::new("com.screenstory.desktop", "gemini-api-key")
         .map_err(|_| AppError::new("CREDENTIAL_STORE_UNAVAILABLE", "The Linux Secret Service credential store is unavailable or locked. Unlock your desktop keyring and try again. Screenstory will not save the API key in a plain-text file."))
+}
+
+#[tauri::command]
+pub fn get_gemini_model_settings(state: State<'_, AppState>) -> Result<GeminiModelSettings, AppError> {
+    let project_dir = state.active_project.lock()
+        .map_err(|_| AppError::new("STATE_LOCK_ERROR", "Project state is temporarily unavailable."))?
+        .as_ref().cloned()
+        .ok_or_else(|| AppError::new("NO_ACTIVE_PROJECT", "Open a project before configuring its AI analysis settings."))?;
+    ensure_analysis_table(&project_dir)?;
+    let connection = db_connection(&project_dir)?;
+    settings_from_connection(&connection)
+}
+
+#[tauri::command]
+pub fn save_gemini_model_settings(
+    primary_model: String,
+    automatic_fallback: bool,
+    state: State<'_, AppState>,
+) -> Result<GeminiModelSettings, AppError> {
+    if !is_supported_gemini_model(&primary_model) {
+        return Err(AppError::new("GEMINI_MODEL_UNSUPPORTED", "Choose Gemini 4 Hydrogen or Gemini 3.8 Flash."));
+    }
+    let project_dir = state.active_project.lock()
+        .map_err(|_| AppError::new("STATE_LOCK_ERROR", "Project state is temporarily unavailable."))?
+        .as_ref().cloned()
+        .ok_or_else(|| AppError::new("NO_ACTIVE_PROJECT", "Open a project before configuring its AI analysis settings."))?;
+    ensure_analysis_table(&project_dir)?;
+    let connection = db_connection(&project_dir)?;
+    connection.execute(
+        "UPDATE gemini_model_settings SET primary_model=?1, automatic_fallback=?2 WHERE id=1",
+        params![primary_model, if automatic_fallback { 1_i64 } else { 0_i64 }],
+    ).map_err(|_| AppError::new("GEMINI_SETTINGS_WRITE_FAILED", "Gemini model settings could not be saved in this project."))?;
+    settings_from_connection(&connection)
 }
 
 #[tauri::command]
@@ -212,6 +292,9 @@ pub(super) fn ensure_analysis_table(project_dir: &Path) -> Result<(), AppError> 
             created_at TEXT NOT NULL,
             provider TEXT NOT NULL,
             model TEXT NOT NULL,
+            primary_model TEXT NOT NULL DEFAULT 'gemini-4-hydrogen',
+            fallback_model TEXT,
+            automatic_fallback INTEGER NOT NULL DEFAULT 1,
             completed_frames INTEGER NOT NULL DEFAULT 0,
             total_frames INTEGER NOT NULL DEFAULT 0,
             total_bytes INTEGER NOT NULL DEFAULT 0,
@@ -224,6 +307,36 @@ pub(super) fn ensure_analysis_table(project_dir: &Path) -> Result<(), AppError> 
             error_code TEXT
         );"
     ).map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The analysis history table could not be initialized."))?;
+
+    let columns = {
+        let mut statement = connection.prepare("PRAGMA table_info(analysis_runs)")
+            .map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The analysis run schema could not be inspected."))?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(1))
+            .map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The analysis run columns could not be listed."))?;
+        rows.collect::<Result<HashSet<_>, _>>()
+            .map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The analysis run columns could not be read."))?
+    };
+    for (name, definition) in [
+        ("primary_model", "TEXT NOT NULL DEFAULT 'gemini-4-hydrogen'"),
+        ("fallback_model", "TEXT"),
+        ("automatic_fallback", "INTEGER NOT NULL DEFAULT 1"),
+    ] {
+        if !columns.contains(name) {
+            connection.execute(
+                &format!("ALTER TABLE analysis_runs ADD COLUMN {name} {definition}"),
+                [],
+            ).map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The analysis model routing fields could not be migrated."))?;
+        }
+    }
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS gemini_model_settings (
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            primary_model TEXT NOT NULL,
+            automatic_fallback INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT OR IGNORE INTO gemini_model_settings (id, primary_model, automatic_fallback)
+        VALUES (1, 'gemini-4-hydrogen', 1);"
+    ).map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The Gemini model settings table could not be initialized."))?;
     Ok(())
 }
 
@@ -460,11 +573,25 @@ pub fn start_analysis(
         return Err(AppError::new("ANALYSIS_ALREADY_ACTIVE", "Finish or cancel the current analysis run before starting another."));
     }
 
+    let model_settings = settings_from_connection(&connection)?;
     let run_id = format!("a{}-{}", now_ms(), std::process::id());
     connection.execute(
-        "INSERT INTO analysis_runs (id, recording_id, source_file_name, status, created_at, provider, model, workflow_description, language)
-         VALUES (?1, ?2, ?3, 'extracting_frames', ?4, 'gemini', ?5, ?6, ?7)",
-        params![run_id, recording_id, file_name, now_ms().to_string(), GEMINI_MODEL, workflow_description, language],
+        "INSERT INTO analysis_runs (
+            id, recording_id, source_file_name, status, created_at, provider, model,
+            primary_model, fallback_model, automatic_fallback, workflow_description, language
+         )
+         VALUES (?1, ?2, ?3, 'extracting_frames', ?4, 'gemini', ?5, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            run_id,
+            recording_id,
+            file_name,
+            now_ms().to_string(),
+            model_settings.primary_model,
+            model_settings.fallback_model,
+            if model_settings.automatic_fallback { 1_i64 } else { 0_i64 },
+            workflow_description,
+            language
+        ],
     ).map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The analysis run could not be registered in the project."))?;
 
     let cancellation = Arc::new(AtomicBool::new(false));
@@ -480,7 +607,15 @@ pub fn start_analysis(
         extract_worker(worker_project, worker_run, worker_recording, worker_file_name, source, workflow_description, language, cancellation);
     });
 
-    Ok(AnalysisStarted { run_id, recording_id, file_name })
+    Ok(AnalysisStarted {
+        run_id,
+        recording_id,
+        file_name,
+        model: model_settings.primary_model.clone(),
+        primary_model: model_settings.primary_model,
+        fallback_model: model_settings.fallback_model,
+        automatic_fallback: model_settings.automatic_fallback,
+    })
 }
 
 #[tauri::command]
@@ -496,7 +631,8 @@ pub fn get_analysis_status(run_id: String, state: State<'_, AppState>) -> Result
     let connection = db_connection(&project_dir)?;
     connection.query_row(
         "SELECT id, recording_id, source_file_name, status, completed_frames, total_frames, total_bytes,
-                duration_seconds, provider, model, error_code, workflow_description, language
+                duration_seconds, provider, model, primary_model, fallback_model, automatic_fallback,
+                error_code, workflow_description, language
          FROM analysis_runs WHERE id=?1",
         params![run_id],
         |row| {
@@ -511,9 +647,12 @@ pub fn get_analysis_status(run_id: String, state: State<'_, AppState>) -> Result
                 duration_seconds: row.get(7)?,
                 provider: row.get(8)?,
                 model: row.get(9)?,
-                error_code: row.get(10)?,
-                workflow_description: row.get(11)?,
-                language: row.get(12)?,
+                primary_model: row.get(10)?,
+                fallback_model: row.get(11)?,
+                automatic_fallback: row.get::<_, i64>(12)? != 0,
+                error_code: row.get(13)?,
+                workflow_description: row.get(14)?,
+                language: row.get(15)?,
             })
         }
     ).map_err(|_| AppError::new("ANALYSIS_RUN_NOT_FOUND", "This analysis run could not be found in the active project."))
@@ -732,6 +871,7 @@ fn redact_provider_error_body(body: &str, api_key: &str) -> String {
 
 fn append_gemini_http_error(
     run_dir: &Path,
+    model: &str,
     status: u16,
     attempt: usize,
     request_id: Option<&str>,
@@ -742,7 +882,7 @@ fn append_gemini_http_error(
     let diagnostic = json!({
         "timestamp_ms": now_ms(),
         "provider": "google-gemini",
-        "model": GEMINI_MODEL,
+        "model": model,
         "http_status": status,
         "attempt": attempt + 1,
         "request_id": request_id,
@@ -758,7 +898,7 @@ fn append_gemini_http_error(
     }
 }
 
-fn gemini_request_body(manifest: &FrameManifest, run_dir: &Path) -> Result<Value, AppError> {
+fn gemini_request_body(manifest: &FrameManifest, run_dir: &Path, model: &str) -> Result<Value, AppError> {
     let mut content = vec![json!({
         "type":"text",
         "text": format!(
@@ -787,7 +927,7 @@ fn gemini_request_body(manifest: &FrameManifest, run_dir: &Path) -> Result<Value
         }));
     }
     let body = json!({
-        "model": GEMINI_MODEL,
+        "model": model,
         "input": content,
         "system_instruction": "You create clear software workflow tutorials from visual evidence. Never claim a click, typed value, or hidden action unless a frame proves it. Do not include markdown fences.",
         "response_format": {
@@ -804,6 +944,103 @@ fn gemini_request_body(manifest: &FrameManifest, run_dir: &Path) -> Result<Value
     Ok(body)
 }
 
+fn should_use_gemini_fallback(error_code: &str, automatic_fallback: bool) -> bool {
+    automatic_fallback && error_code == "GEMINI_SERVER_ERROR"
+}
+
+fn request_gemini_model(
+    client: &Client,
+    api_key: &str,
+    model: &str,
+    body: &Value,
+    run_dir: &Path,
+    cancellation: &AtomicBool,
+) -> Result<reqwest::blocking::Response, AppError> {
+    let mut last_error_code = "GEMINI_NETWORK_ERROR";
+    for attempt in 0..3 {
+        if cancellation.load(Ordering::SeqCst) {
+            return Err(AppError::new("ANALYSIS_CANCELLED", "Analysis was cancelled."));
+        }
+        match client.post(GEMINI_ENDPOINT)
+            .header("x-goog-api-key", api_key)
+            .header("api-revision", "2026-05-20")
+            .header("content-type", "application/json")
+            .json(body)
+            .send()
+        {
+            Ok(result) if result.status().is_success() => return Ok(result),
+            Ok(result) => {
+                let status = result.status().as_u16();
+                let request_id = result.headers()
+                    .get("x-goog-request-id")
+                    .or_else(|| result.headers().get("x-request-id"))
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned);
+                let retry_after = result.headers()
+                    .get("retry-after")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned);
+                let response = result;
+                let mut response_bytes = Vec::with_capacity(4096);
+                let _ = response.take(4096).read_to_end(&mut response_bytes);
+                let response_body = String::from_utf8_lossy(&response_bytes).into_owned();
+                append_gemini_http_error(
+                    run_dir, model, status, attempt, request_id.as_deref(),
+                    retry_after.as_deref(), &response_body, api_key,
+                );
+
+                if status == 401 || status == 403 {
+                    return Err(AppError::new("GEMINI_AUTH_FAILED", "Google rejected the Gemini API key. Check the key in Screenstory settings."));
+                } else if status == 429 {
+                    last_error_code = "GEMINI_RATE_LIMITED";
+                } else if status >= 500 {
+                    last_error_code = "GEMINI_SERVER_ERROR";
+                } else {
+                    return Err(AppError::new("GEMINI_REQUEST_REJECTED", format!("Gemini rejected the analysis request (HTTP {status}). Check the selected model and request settings.")));
+                }
+                if attempt < 2 {
+                    wait_for_gemini_retry(attempt, retry_after.as_deref(), cancellation)?;
+                }
+            }
+            Err(_) => {
+                last_error_code = "GEMINI_NETWORK_ERROR";
+                if attempt < 2 {
+                    for _ in 0..5 {
+                        if cancellation.load(Ordering::SeqCst) {
+                            return Err(AppError::new("ANALYSIS_CANCELLED", "Analysis was cancelled while waiting to retry Gemini."));
+                        }
+                        thread::sleep(Duration::from_millis(100 * (attempt + 1) as u64));
+                    }
+                }
+            }
+        }
+    }
+    let message = match last_error_code {
+        "GEMINI_SERVER_ERROR" => format!("Gemini model {model} remained unavailable after automatic retries."),
+        "GEMINI_RATE_LIMITED" => format!("Gemini model {model} remained rate limited after automatic retries."),
+        _ => format!("Gemini model {model} could not complete the request after bounded network retries."),
+    };
+    Err(AppError::new(last_error_code, message))
+}
+
+fn append_gemini_model_fallback(run_dir: &Path, primary_model: &str, fallback_model: &str) {
+    let diagnostic = json!({
+        "timestamp_ms": now_ms(),
+        "provider": "google-gemini",
+        "event": "automatic_model_fallback",
+        "primary_model": primary_model,
+        "fallback_model": fallback_model,
+        "reason": "primary_model_server_error_after_retries"
+    });
+    let path = run_dir.join("provider-errors.jsonl");
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut line) = serde_json::to_vec(&diagnostic) {
+            line.push(b'\n');
+            let _ = file.write_all(&line);
+        }
+    }
+}
+
 fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<AtomicBool>) {
     let result = (|| -> Result<(), AppError> {
         if cancellation.load(Ordering::SeqCst) {
@@ -813,11 +1050,13 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
         let api_key = entry.get_password()
             .map_err(|_| AppError::new("GEMINI_API_KEY_MISSING", "Add your Gemini API key in Screenstory settings before sending sampled frames."))?;
         let connection = db_connection(&project_dir)?;
-        let (manifest_path, workflow, language, recording_id): (String, String, String, String) = connection.query_row(
-            "SELECT manifest_path, workflow_description, language, recording_id FROM analysis_runs WHERE id=?1 AND status='sending_to_provider'",
-            params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        ).map_err(|_| AppError::new("ANALYSIS_RUN_NOT_READY", "This analysis run is not ready to send to Gemini."))?;
+        let (manifest_path, workflow, language, recording_id, primary_model, fallback_model, automatic_fallback):
+            (String, String, String, String, String, Option<String>, i64) = connection.query_row(
+                "SELECT manifest_path, workflow_description, language, recording_id, primary_model, fallback_model, automatic_fallback
+                 FROM analysis_runs WHERE id=?1 AND status='sending_to_provider'",
+                params![run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?))
+            ).map_err(|_| AppError::new("ANALYSIS_RUN_NOT_READY", "This analysis run is not ready to send to Gemini."))?;
         let manifest_path = PathBuf::from(manifest_path);
         let canonical_run = project_dir.join("analysis").join(&run_id).canonicalize()
             .map_err(|_| AppError::new("ANALYSIS_PATH_INVALID", "The analysis run folder is unavailable."))?;
@@ -834,79 +1073,56 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
             return Err(AppError::new("ANALYSIS_MANIFEST_MISMATCH", "The analysis manifest does not match this run or contains an invalid frame count."));
         }
         let run_dir = project_dir.join("analysis").join(&run_id);
-        let body = gemini_request_body(&manifest, &run_dir)?;
         let client = Client::builder()
             .timeout(Duration::from_secs(120))
             .connect_timeout(Duration::from_secs(20))
             .build()
             .map_err(|_| AppError::new("GEMINI_CLIENT_ERROR", "The Gemini network client could not be initialized."))?;
 
-        let mut response = None;
-        let mut last_error_code = "GEMINI_NETWORK_ERROR";
-        for attempt in 0..3 {
-            if cancellation.load(Ordering::SeqCst) {
-                return Err(AppError::new("ANALYSIS_CANCELLED", "Analysis was cancelled."));
-            }
-            match client.post(GEMINI_ENDPOINT)
-                .header("x-goog-api-key", &api_key)
-                .header("api-revision", "2026-05-20")
-                .header("content-type", "application/json")
-                .json(&body)
-                .send() {
-                Ok(result) if result.status().is_success() => {
-                    response = Some(result);
-                    break;
-                }
-                Ok(result) => {
-                    let status = result.status().as_u16();
-                    let request_id = result.headers()
-                        .get("x-goog-request-id")
-                        .or_else(|| result.headers().get("x-request-id"))
-                        .and_then(|value| value.to_str().ok())
-                        .map(str::to_owned);
-                    let retry_after = result.headers()
-                        .get("retry-after")
-                        .and_then(|value| value.to_str().ok())
-                        .map(str::to_owned);
-                    let mut response = result;
-                    let mut response_bytes = Vec::with_capacity(4096);
-                    let _ = response.take(4096).read_to_end(&mut response_bytes);
-                    let response_body = String::from_utf8_lossy(&response_bytes).into_owned();
-                    append_gemini_http_error(
-                        &run_dir,
-                        status,
-                        attempt,
-                        request_id.as_deref(),
-                        retry_after.as_deref(),
-                        &response_body,
-                        &api_key,
-                    );
-
-                    if status == 401 || status == 403 {
-                        return Err(AppError::new("GEMINI_AUTH_FAILED", "Google rejected the Gemini API key. Check the key in Screenstory settings."));
-                    } else if status == 429 {
-                        last_error_code = "GEMINI_RATE_LIMITED";
-                        if attempt < 2 {
-                            wait_for_gemini_retry(attempt, retry_after.as_deref(), cancellation.as_ref())?;
-                            continue;
-                        }
-                    } else if status >= 500 {
-                        last_error_code = "GEMINI_SERVER_ERROR";
-                        if attempt < 2 {
-                            wait_for_gemini_retry(attempt, retry_after.as_deref(), cancellation.as_ref())?;
-                            continue;
-                        }
-                    } else {
-                        return Err(AppError::new("GEMINI_REQUEST_REJECTED", format!("Gemini rejected the analysis request (HTTP {status}). Check the selected model and request settings.")));
-                    }
-                }
-                Err(_) => {
-                    last_error_code = "GEMINI_NETWORK_ERROR";
-                    if attempt < 2 { thread::sleep(Duration::from_millis(500 * (attempt + 1) as u64)); continue; }
-                }
-            }
+        if !is_supported_gemini_model(&primary_model) {
+            return Err(AppError::new("GEMINI_MODEL_UNSUPPORTED", "This analysis run references a model that is not supported by this Screenstory version."));
         }
-        let response = response.ok_or_else(|| AppError::new(last_error_code, "Gemini could not complete the analysis after bounded retries."))?;
+        let valid_fallback = fallback_model.filter(|candidate| {
+            is_supported_gemini_model(candidate) && candidate != &primary_model
+        });
+        let primary_body = gemini_request_body(&manifest, &run_dir, &primary_model)?;
+        let (response, used_model) = match request_gemini_model(
+            &client, &api_key, &primary_model, &primary_body, &run_dir, cancellation.as_ref(),
+        ) {
+            Ok(successful_response) => (successful_response, primary_model.clone()),
+            Err(primary_error)
+                if should_use_gemini_fallback(primary_error.code, automatic_fallback != 0)
+                    && valid_fallback.is_some() =>
+            {
+                let fallback_name = valid_fallback.as_deref().expect("fallback was checked above");
+                append_gemini_model_fallback(&run_dir, &primary_model, fallback_name);
+                connection.execute(
+                    "UPDATE analysis_runs SET model=?1 WHERE id=?2",
+                    params![fallback_name, run_id],
+                ).map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The active fallback model could not be recorded."))?;
+                if cancellation.load(Ordering::SeqCst) {
+                    return Err(AppError::new("ANALYSIS_CANCELLED", "Analysis was cancelled before the fallback model request."));
+                }
+                let fallback_body = gemini_request_body(&manifest, &run_dir, fallback_name)?;
+                match request_gemini_model(
+                    &client, &api_key, fallback_name, &fallback_body, &run_dir, cancellation.as_ref(),
+                ) {
+                    Ok(successful_response) => (successful_response, fallback_name.to_string()),
+                    Err(fallback_error) if fallback_error.code == "GEMINI_SERVER_ERROR" => {
+                        return Err(AppError::new(
+                            "GEMINI_MODELS_UNAVAILABLE",
+                            format!("Both Gemini models ({primary_model} and {fallback_name}) remained unavailable after automatic retries. Please try again later."),
+                        ));
+                    }
+                    Err(fallback_error) => return Err(fallback_error),
+                }
+            }
+            Err(primary_error) => return Err(primary_error),
+        };
+        connection.execute(
+            "UPDATE analysis_runs SET model=?1 WHERE id=?2",
+            params![used_model, run_id],
+        ).map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The model used for this analysis could not be recorded."))?;
         if cancellation.load(Ordering::SeqCst) {
             return Err(AppError::new("ANALYSIS_CANCELLED", "Analysis was cancelled after the provider request."));
         }
@@ -1054,6 +1270,24 @@ mod tests {
         let cancellation = AtomicBool::new(false);
         let error = wait_for_gemini_retry(0, Some("61"), &cancellation).unwrap_err();
         assert_eq!(error.code, "GEMINI_RETRY_DEFERRED");
+    }
+
+    #[test]
+    fn supported_gemini_models_have_a_distinct_fallback_pair() {
+        assert!(is_supported_gemini_model("gemini-4-hydrogen"));
+        assert!(is_supported_gemini_model("gemini-3.8-flash"));
+        assert!(!is_supported_gemini_model("gemini-3.8-flash-preview"));
+        assert_eq!(alternate_gemini_model("gemini-4-hydrogen"), Some("gemini-3.8-flash"));
+        assert_eq!(alternate_gemini_model("gemini-3.8-flash"), Some("gemini-4-hydrogen"));
+        assert_eq!(alternate_gemini_model("unknown"), None);
+    }
+
+    #[test]
+    fn automatic_fallback_is_only_for_server_errors() {
+        assert!(should_use_gemini_fallback("GEMINI_SERVER_ERROR", true));
+        assert!(!should_use_gemini_fallback("GEMINI_RATE_LIMITED", true));
+        assert!(!should_use_gemini_fallback("GEMINI_NETWORK_ERROR", true));
+        assert!(!should_use_gemini_fallback("GEMINI_SERVER_ERROR", false));
     }
 
     #[test]
