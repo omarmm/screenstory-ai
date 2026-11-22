@@ -746,39 +746,104 @@ fn response_text(value: &Value) -> Option<String> {
 
 fn validate_draft(draft: &AnalysisDraft, manifest: &FrameManifest) -> Result<(), AppError> {
     if draft.schema_version != 1 {
-        return Err(AppError::new("ANALYSIS_SCHEMA_UNSUPPORTED", "Gemini returned an unsupported tutorial schema version."));
+        return Err(AppError::new(
+            "ANALYSIS_SCHEMA_UNSUPPORTED",
+            format!("Unsupported tutorial schema version {}.", draft.schema_version),
+        ));
     }
-    if draft.summary.trim().is_empty() || draft.summary.chars().count() > 4000 || draft.steps.is_empty() || draft.steps.len() > 60 || draft.zoom_suggestions.len() > 100 {
-        return Err(AppError::new("ANALYSIS_OUTPUT_INVALID", "Gemini returned an empty or oversized tutorial draft."));
+    if draft.summary.trim().is_empty() {
+        return Err(AppError::new("ANALYSIS_OUTPUT_INVALID", "Draft validation failed: empty_summary."));
     }
+    if draft.summary.chars().count() > 4000 {
+        return Err(AppError::new("ANALYSIS_OUTPUT_INVALID", "Draft validation failed: summary_exceeds_4000_characters."));
+    }
+    if draft.steps.is_empty() {
+        return Err(AppError::new("ANALYSIS_OUTPUT_INVALID", "Draft validation failed: no_tutorial_steps."));
+    }
+    if draft.steps.len() > 60 {
+        return Err(AppError::new("ANALYSIS_OUTPUT_INVALID", "Draft validation failed: tutorial_step_count_exceeds_60."));
+    }
+    if draft.zoom_suggestions.len() > 100 {
+        return Err(AppError::new("ANALYSIS_OUTPUT_INVALID", "Draft validation failed: zoom_suggestion_count_exceeds_100."));
+    }
+
     let duration = manifest.source_duration_ms;
     let known_frames: HashSet<&str> = manifest.frames.iter().map(|f| f.id.as_str()).collect();
     let mut previous_end = 0_u64;
     let mut step_ids = HashSet::new();
     for (index, step) in draft.steps.iter().enumerate() {
-        if step.id.trim().is_empty() || !step_ids.insert(step.id.as_str()) || step.title.trim().is_empty() || step.title.chars().count() > 160
-            || step.description.trim().is_empty() || step.description.chars().count() > 1200
-            || step.start_ms >= step.end_ms || step.end_ms > duration
-            || (index > 0 && step.start_ms < previous_end)
-            || !step.confidence.is_finite() || !(0.0..=1.0).contains(&step.confidence)
-            || !["observed", "inference"].contains(&step.evidence_kind.as_str())
-            || step.evidence_frame_ids.is_empty()
-            || step.evidence_frame_ids.iter().any(|id| !known_frames.contains(id.as_str())) {
-            return Err(AppError::new("ANALYSIS_OUTPUT_INVALID", "Gemini returned a tutorial step with invalid timing, evidence, confidence, or text."));
+        let issue = if step.id.trim().is_empty() {
+            Some("empty_step_id")
+        } else if !step_ids.insert(step.id.as_str()) {
+            Some("duplicate_step_id")
+        } else if step.title.trim().is_empty() {
+            Some("empty_step_title")
+        } else if step.title.chars().count() > 160 {
+            Some("step_title_exceeds_160_characters")
+        } else if step.description.trim().is_empty() {
+            Some("empty_step_description")
+        } else if step.description.chars().count() > 1200 {
+            Some("step_description_exceeds_1200_characters")
+        } else if step.start_ms >= step.end_ms {
+            Some("step_start_must_precede_end")
+        } else if step.end_ms > duration {
+            Some("step_end_exceeds_source_duration")
+        } else if index > 0 && step.start_ms < previous_end {
+            Some("steps_are_not_time_ordered_or_overlap")
+        } else if !step.confidence.is_finite() || !(0.0..=1.0).contains(&step.confidence) {
+            Some("step_confidence_out_of_range")
+        } else if !["observed", "inference"].contains(&step.evidence_kind.as_str()) {
+            Some("invalid_step_evidence_kind")
+        } else if step.evidence_frame_ids.is_empty() {
+            Some("step_has_no_evidence_frames")
+        } else if step.evidence_frame_ids.iter().any(|id| !known_frames.contains(id.as_str())) {
+            Some("step_references_unknown_frame_id")
+        } else {
+            None
+        };
+        if let Some(issue) = issue {
+            return Err(AppError::new(
+                "ANALYSIS_OUTPUT_INVALID",
+                format!("Draft validation failed: tutorial_step[{}] {issue}.", index + 1),
+            ));
         }
         previous_end = step.end_ms;
     }
+
     let mut zoom_ids = HashSet::new();
-    for zoom in &draft.zoom_suggestions {
-        if zoom.id.trim().is_empty() || !zoom_ids.insert(zoom.id.as_str())
-            || zoom.start_ms >= zoom.end_ms || zoom.end_ms > duration
-            || !zoom.x.is_finite() || !zoom.y.is_finite() || !zoom.width.is_finite() || !zoom.height.is_finite()
-            || zoom.x < 0.0 || zoom.y < 0.0 || zoom.width <= 0.0 || zoom.height <= 0.0
+    for (index, zoom) in draft.zoom_suggestions.iter().enumerate() {
+        let issue = if zoom.id.trim().is_empty() {
+            Some("empty_zoom_id")
+        } else if !zoom_ids.insert(zoom.id.as_str()) {
+            Some("duplicate_zoom_id")
+        } else if zoom.start_ms >= zoom.end_ms {
+            Some("zoom_start_must_precede_end")
+        } else if zoom.end_ms > duration {
+            Some("zoom_end_exceeds_source_duration")
+        } else if !zoom.x.is_finite() || !zoom.y.is_finite()
+            || !zoom.width.is_finite() || !zoom.height.is_finite()
+        {
+            Some("zoom_geometry_contains_non_finite_values")
+        } else if zoom.x < 0.0 || zoom.y < 0.0 || zoom.width <= 0.0 || zoom.height <= 0.0
             || zoom.x + zoom.width > 1.0 || zoom.y + zoom.height > 1.0
-            || !zoom.target_scale.is_finite() || !(1.0..=3.0).contains(&zoom.target_scale)
-            || zoom.rationale.trim().is_empty() || zoom.evidence_frame_ids.is_empty()
-            || zoom.evidence_frame_ids.iter().any(|id| !known_frames.contains(id.as_str())) {
-            return Err(AppError::new("ANALYSIS_OUTPUT_INVALID", "Gemini returned a zoom suggestion with invalid timing, evidence, or geometry."));
+        {
+            Some("zoom_geometry_out_of_bounds")
+        } else if !zoom.target_scale.is_finite() || !(1.0..=3.0).contains(&zoom.target_scale) {
+            Some("zoom_target_scale_out_of_range")
+        } else if zoom.rationale.trim().is_empty() {
+            Some("empty_zoom_rationale")
+        } else if zoom.evidence_frame_ids.is_empty() {
+            Some("zoom_has_no_evidence_frames")
+        } else if zoom.evidence_frame_ids.iter().any(|id| !known_frames.contains(id.as_str())) {
+            Some("zoom_references_unknown_frame_id")
+        } else {
+            None
+        };
+        if let Some(issue) = issue {
+            return Err(AppError::new(
+                "ANALYSIS_OUTPUT_INVALID",
+                format!("Draft validation failed: zoom_suggestion[{}] {issue}.", index + 1),
+            ));
         }
     }
     Ok(())
@@ -925,6 +990,41 @@ fn append_gemini_http_error(run_dir: &Path, context: GeminiHttpErrorContext<'_>)
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
         if let Ok(mut line) = serde_json::to_vec(&diagnostic) {
             line.push(b'\n');
+            let _ = file.write_all(&line);
+        }
+    }
+}
+
+fn append_gemini_output_diagnostic(
+    run_dir: &Path,
+    model: &str,
+    stage: &str,
+    reason: &str,
+    interaction_id: Option<&str>,
+    response_bytes: usize,
+    schema_version: Option<u32>,
+    step_count: Option<usize>,
+    zoom_count: Option<usize>,
+) {
+    // Deliberately store metadata and validation reasons only. Never log sampled
+    // screenshots, workflow text, or the model-generated tutorial body.
+    let diagnostic = json!({
+        "timestamp_ms": now_ms(),
+        "provider": "google-gemini",
+        "event": "analysis_output_rejected",
+        "model": model,
+        "stage": stage,
+        "reason": reason,
+        "interaction_id": interaction_id,
+        "response_bytes": response_bytes,
+        "schema_version": schema_version,
+        "step_count": step_count,
+        "zoom_suggestion_count": zoom_count
+    });
+    let path = run_dir.join("provider-errors.jsonl");
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut line) = serde_json::to_vec(&diagnostic) {
+            line.push(b'\\n');
             let _ = file.write_all(&line);
         }
     }
@@ -1166,12 +1266,83 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
         if cancellation.load(Ordering::SeqCst) {
             return Err(AppError::new("ANALYSIS_CANCELLED", "Analysis was cancelled after the provider request."));
         }
-        let payload: Value = response.json()
-            .map_err(|_| AppError::new("GEMINI_RESPONSE_INVALID", "Gemini returned a response that could not be parsed."))?;
-        let text = response_text(&payload).ok_or_else(|| AppError::new("GEMINI_RESPONSE_EMPTY", "Gemini returned no structured tutorial content."))?;
-        let mut draft: AnalysisDraft = serde_json::from_str(&text)
-            .map_err(|_| AppError::new("GEMINI_RESPONSE_INVALID", "Gemini's structured response did not match the tutorial schema."))?;
-        validate_draft(&draft, &manifest)?;
+        let response_bytes = response.content_length().unwrap_or_default() as usize;
+        let payload: Value = match response.json() {
+            Ok(payload) => payload,
+            Err(_) => {
+                append_gemini_output_diagnostic(
+                    &run_dir,
+                    &used_model,
+                    "interaction_response_json",
+                    "response_json_decode_failed",
+                    None,
+                    response_bytes,
+                    None,
+                    None,
+                    None,
+                );
+                return Err(AppError::new(
+                    "GEMINI_RESPONSE_INVALID",
+                    "Gemini returned a response that could not be parsed. See the local provider diagnostics.",
+                ));
+            }
+        };
+        let interaction_id = payload.get("id").and_then(Value::as_str);
+        let text = match response_text(&payload) {
+            Some(text) => text,
+            None => {
+                append_gemini_output_diagnostic(
+                    &run_dir,
+                    &used_model,
+                    "interaction_model_output",
+                    "no_text_model_output_step",
+                    interaction_id,
+                    response_bytes,
+                    None,
+                    None,
+                    None,
+                );
+                return Err(AppError::new(
+                    "GEMINI_RESPONSE_EMPTY",
+                    "Gemini returned no structured tutorial content. See the local provider diagnostics.",
+                ));
+            }
+        };
+        let mut draft: AnalysisDraft = match serde_json::from_str(&text) {
+            Ok(draft) => draft,
+            Err(error) => {
+                let reason = error.to_string();
+                append_gemini_output_diagnostic(
+                    &run_dir,
+                    &used_model,
+                    "draft_json_deserialization",
+                    &reason,
+                    interaction_id,
+                    text.len(),
+                    None,
+                    None,
+                    None,
+                );
+                return Err(AppError::new(
+                    "GEMINI_RESPONSE_INVALID",
+                    "Gemini's structured response did not match the tutorial schema. See the local provider diagnostics.",
+                ));
+            }
+        };
+        if let Err(error) = validate_draft(&draft, &manifest) {
+            append_gemini_output_diagnostic(
+                &run_dir,
+                &used_model,
+                "draft_validation",
+                &error.message,
+                interaction_id,
+                text.len(),
+                Some(draft.schema_version),
+                Some(draft.steps.len()),
+                Some(draft.zoom_suggestions.len()),
+            );
+            return Err(error);
+        }
         draft.status = "needs_review".to_string();
         draft.language = manifest.language.clone();
         let draft_path = run_dir.join("draft.json");
@@ -1417,6 +1588,39 @@ mod tests {
         assert!(!redacted.contains("secret-value"));
         assert!(redacted.contains("[REDACTED]"));
         assert!(redacted.chars().count() <= 4096);
+    }
+
+    #[test]
+    fn output_diagnostics_record_validation_metadata_without_model_content_or_secrets() {
+        let run_dir = std::env::temp_dir().join(format!(
+            "screenstory-output-diagnostic-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        fs::create_dir_all(&run_dir).unwrap();
+
+        append_gemini_output_diagnostic(
+            &run_dir,
+            GEMINI_MODEL_FLASH,
+            "draft_validation",
+            "Draft validation failed: tutorial_step[1] step_references_unknown_frame_id.",
+            Some("interaction-test-id"),
+            1234,
+            Some(1),
+            Some(2),
+            Some(0),
+        );
+
+        let contents = fs::read_to_string(run_dir.join("provider-errors.jsonl")).unwrap();
+        let value: Value = serde_json::from_str(contents.trim()).unwrap();
+        assert_eq!(value["event"], "analysis_output_rejected");
+        assert_eq!(value["model"], GEMINI_MODEL_FLASH);
+        assert_eq!(value["stage"], "draft_validation");
+        assert_eq!(value["step_count"], 2);
+        assert_eq!(value["interaction_id"], "interaction-test-id");
+        assert!(!contents.contains("sample screenshot text"));
+        assert!(!contents.contains("AIza"));
+        fs::remove_dir_all(run_dir).unwrap();
     }
 
     #[test]
