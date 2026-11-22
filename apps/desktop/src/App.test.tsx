@@ -358,8 +358,8 @@ describe("Screenstory desktop application", () => {
       expectedRevision: 1,
       timeline: expect.objectContaining({
         annotations: expect.arrayContaining([
-          expect.objectContaining({ id: "caption-ar", fontSize: 52, foreground: "#AABBCC", background: "#1234568C", direction: "rtl" }),
-          expect.objectContaining({ id: "caption-en", fontSize: 52, foreground: "#AABBCC", background: "#1234568C", direction: "ltr" }),
+          expect.objectContaining({ id: "caption-ar", fontSize: 52, foreground: "#aabbcc", background: "#1234568C", direction: "rtl" }),
+          expect.objectContaining({ id: "caption-en", fontSize: 52, foreground: "#aabbcc", background: "#1234568C", direction: "ltr" }),
         ]),
       }),
     })));
