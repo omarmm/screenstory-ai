@@ -69,6 +69,8 @@ function standard(command: string) {
 describe("Screenstory desktop application", () => {
   beforeEach(() => {
     cleanup();
+    window.localStorage.clear();
+    document.documentElement.dataset.theme = "dark";
     vi.restoreAllMocks();
     invoke.mockReset();
     invoke.mockImplementation((command: string) => standard(command));
@@ -299,6 +301,62 @@ describe("Screenstory desktop application", () => {
       }),
     })));
   });
+  it("switches between persistent light and dark themes", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Switch to light theme" }));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    expect(screen.getByRole("button", { name: "Switch to dark theme" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch to dark theme" }));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+  });
+
+  it("applies shared caption size and colors to every caption while keeping per-caption controls", async () => {
+    const firstCaption = {
+      id: "caption-ar", text: "افتح الإعدادات", language: "ar" as const,
+      startMs: 0, endMs: 1000, x: 0.5, y: 0.92, maxWidth: 0.84,
+      fontSize: 44, foreground: "#FFFFFF", background: "#000000B3",
+      alignment: "center" as const, direction: "rtl" as const, origin: "ai" as const,
+    };
+    const secondCaption = {
+      ...firstCaption, id: "caption-en", text: "Open settings", language: "en" as const,
+      startMs: 1000, endMs: 2000, direction: "ltr" as const,
+    };
+    const timelineWithCaptions = { ...timeline, annotations: [firstCaption, secondCaption] };
+
+    invoke.mockImplementation((command: string) => {
+      if (command === "list_projects") return Promise.resolve([project]);
+      if (command === "get_active_project") return Promise.resolve(project);
+      if (command === "list_recordings") return Promise.resolve([recording]);
+      if (command === "get_timeline_for_recording") return Promise.resolve(timelineWithCaptions);
+      if (command === "save_timeline") return Promise.resolve({ ...timelineWithCaptions, revision: 2 });
+      return standard(command);
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open timeline" }));
+
+    expect(screen.getByLabelText("Caption 1 text color")).toBeTruthy();
+    expect(screen.getByLabelText("Caption 2 background color")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("All captions font size"), { target: { value: "52" } });
+    fireEvent.change(screen.getByLabelText("All captions text color"), { target: { value: "#AABBCC" } });
+    fireEvent.change(screen.getByLabelText("All captions background color"), { target: { value: "#123456" } });
+    fireEvent.change(screen.getByLabelText("All captions background opacity"), { target: { value: "55" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply to all captions" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save revision" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_timeline", expect.objectContaining({
+      expectedRevision: 1,
+      timeline: expect.objectContaining({
+        annotations: expect.arrayContaining([
+          expect.objectContaining({ id: "caption-ar", fontSize: 52, foreground: "#AABBCC", background: "#1234568C", direction: "rtl" }),
+          expect.objectContaining({ id: "caption-en", fontSize: 52, foreground: "#AABBCC", background: "#1234568C", direction: "ltr" }),
+        ]),
+      }),
+    })));
+  });
+
   it("exports only the saved timeline revision and displays the verified MP4 result", async () => {
     invoke.mockImplementation((command: string) => {
       if (command === "list_projects") return Promise.resolve([project]);
