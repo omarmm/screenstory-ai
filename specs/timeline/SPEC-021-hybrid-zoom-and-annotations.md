@@ -74,6 +74,6 @@ Video rendering implementation, speech transcription, voice-over, remote project
 - Detect Arabic and Latin script to choose the annotation language, writing direction, and alignment. Use the draft language only when the title contains no detectable letters.
 - Use a readable default caption placement and styling; all generated caption fields remain editable or removable in the timeline editor.
 - Preserve manual annotations as manual. AI-generated annotations are explicitly marked as AI-origin and are valid persisted timeline content.
-- Do not modify the immutable analysis draft or the source recording. Existing timelines are not silently rewritten; this behavior applies when a new timeline is created from a completed draft.
+- Do not modify the immutable analysis draft or the source recording. Existing timelines receive a one-time, automatic caption backfill the first time they are opened after this feature is installed. The backfill preserves existing annotations, adds captions only for steps not already covered by an annotation with the same time range, and saves a new immutable revision. A persisted generation version prevents captions from being recreated if a user later removes them.
 
 This amendment makes the tutorial-step-to-on-screen-caption conversion part of the default timeline creation workflow. Export continues to render all valid saved annotations through the existing caption renderer.
