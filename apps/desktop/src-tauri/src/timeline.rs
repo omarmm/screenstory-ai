@@ -948,7 +948,10 @@ mod tests {
         assert_eq!(annotations[1].end_ms, steps[1].end_ms);
         assert_eq!(annotations[1].language, "en");
         assert_eq!(annotations[1].direction, "ltr");
-        assert_eq!(annotations[1].alignment, "left");
+        assert_eq!(annotations[1].alignment, "center");
+        assert_eq!(annotations[1].x, 0.5);
+        assert_eq!(annotations[1].y, 0.92);
+        assert_eq!(annotations[1].font_size, 44);
         assert_eq!(annotations[1].origin, "ai");
         assert!(validate_timeline(
             &TimelineDocument {
