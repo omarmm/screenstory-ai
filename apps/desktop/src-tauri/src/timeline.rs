@@ -676,7 +676,7 @@ pub fn create_timeline_from_draft(
             transition_duration_ms: 250,
         }).collect(),
         annotations,
-        caption_generation_version: 1,
+        caption_generation_version: 2,
     };
     validate_timeline(&timeline, &manifest)?;
     let relative_snapshot = format!("{}/revision-1.json", timeline_id);
@@ -928,7 +928,12 @@ mod tests {
         assert_eq!(annotations[0].end_ms, steps[0].end_ms);
         assert_eq!(annotations[0].language, "ar");
         assert_eq!(annotations[0].direction, "rtl");
-        assert_eq!(annotations[0].alignment, "right");
+        assert_eq!(annotations[0].alignment, "center");
+        assert_eq!(annotations[0].x, 0.5);
+        assert_eq!(annotations[0].y, 0.86);
+        assert_eq!(annotations[0].max_width, 0.84);
+        assert_eq!(annotations[0].font_size, 40);
+        assert_eq!(annotations[0].background, "#000000B3");
         assert_eq!(annotations[0].origin, "ai");
 
         assert_eq!(annotations[1].text, "Confirm the code");
