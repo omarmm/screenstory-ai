@@ -62,6 +62,7 @@ type TimelineDocument = {
   steps: TimelineStep[];
   zoomSegments: TimelineZoom[];
   annotations: TimelineAnnotation[];
+  captionGenerationVersion?: number;
 };
 
 function formatDuration(totalSeconds: number): string {
