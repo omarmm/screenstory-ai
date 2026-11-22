@@ -53,7 +53,7 @@ type TimelineZoom = {
 type TimelineAnnotation = {
   id: string; text: string; language: "ar" | "en" | "mixed"; startMs: number; endMs: number;
   x: number; y: number; maxWidth: number; fontSize: number; foreground: string; background: string;
-  alignment: "left" | "center" | "right"; direction: "rtl" | "ltr" | "auto"; origin: "manual";
+  alignment: "left" | "center" | "right"; direction: "rtl" | "ltr" | "auto"; origin: "ai" | "manual";
 };
 type TimelineDocument = {
   schemaVersion: number; timelineId: string; recordingId: string; sourceFileName: string;
@@ -915,7 +915,7 @@ export default function App() {
                     {timeline.annotations.length === 0 && <p className="timeline-muted">No captions yet. Add Arabic, English, or mixed-language text overlays.</p>}
                     {timeline.annotations.map((annotation, index) => (
                       <article className="zoom-editor-card" key={annotation.id}>
-                        <div className="timeline-step-top"><strong>Caption {index + 1}</strong><span className="timeline-origin manual">MANUAL</span><button className="text-button danger-text" onClick={() => removeTimelineAnnotation(index)} disabled={timelineBusy}>Remove</button></div>
+                        <div className="timeline-step-top"><strong>Caption {index + 1}</strong><span className={"timeline-origin " + annotation.origin}>{annotation.origin === "ai" ? "AI GENERATED" : "MANUAL"}</span><button className="text-button danger-text" onClick={() => removeTimelineAnnotation(index)} disabled={timelineBusy}>Remove</button></div>
                         <label className="field-label" htmlFor={"annotation-text-" + annotation.id}>Caption text</label>
                         <textarea id={"annotation-text-" + annotation.id} className="timeline-textarea" maxLength={500} value={annotation.text} onChange={(event) => updateTimelineAnnotation(index, { text: event.target.value })} />
                         <div className="timeline-time-grid">
