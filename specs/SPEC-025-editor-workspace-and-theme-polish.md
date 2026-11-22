@@ -8,6 +8,10 @@
 
 Improve the desktop editor layout and visual controls without changing recording, Gemini analysis, timeline persistence, zoom composition, caption timing, or FFmpeg export behavior.
 
+## Visual direction
+
+Use Walkmark as the visual reference for the editor's calm, centered workspace: a readable central content column, vertically stacked step cards, restrained neutral surfaces, muted secondary text, and one indigo accent. Adapt this direction to Screenstory's video timeline and editing tools rather than copying Walkmark's documentation workflow.
+
 ## 2. Centered timeline workspace
 
 - The timeline editor occupies the full content row rather than the narrow secondary column.
