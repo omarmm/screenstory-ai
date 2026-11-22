@@ -573,8 +573,8 @@ export default function App() {
       annotations: [...current.annotations, {
         id: "annotation-" + Date.now(), text: "Add your caption", language: "mixed",
         startMs: 0, endMs: Math.min(current.sourceDurationMs, 3000),
-        x: 0.08, y: 0.08, maxWidth: 0.84, fontSize: 24,
-        foreground: "#FFFFFF", background: "#000000CC", alignment: "center",
+        x: 0.5, y: 0.86, maxWidth: 0.84, fontSize: 40,
+        foreground: "#FFFFFF", background: "#000000B3", alignment: "center",
         direction: "auto", origin: "manual",
       }],
     } : current);
