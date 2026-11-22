@@ -40,8 +40,8 @@ function standard(command: string) {
   switch (command) {
     case "get_app_info": return Promise.resolve(appInfo);
     case "get_gemini_key_status": return Promise.resolve({ configured: false });
-    case "get_gemini_model_settings": return Promise.resolve({ primaryModel: "gemini-4-hydrogen", fallbackModel: "gemini-3.8-flash", automaticFallback: true });
-    case "save_gemini_model_settings": return Promise.resolve({ primaryModel: "gemini-4-hydrogen", fallbackModel: "gemini-3.8-flash", automaticFallback: true });
+    case "get_gemini_model_settings": return Promise.resolve({ primaryModel: "gemini-3.6-flash", fallbackModel: "gemini-3.5-flash-lite", automaticFallback: true });
+    case "save_gemini_model_settings": return Promise.resolve({ primaryModel: "gemini-3.6-flash", fallbackModel: "gemini-3.5-flash-lite", automaticFallback: true });
     case "check_dependencies": return Promise.resolve(report);
     case "get_recording_status": return Promise.resolve({ isRecording: false, fileName: null, startedAtMs: null, warning: null });
     case "list_capture_sources": return Promise.resolve([captureSource]);
@@ -101,19 +101,23 @@ describe("Screenstory desktop application", () => {
     confirm.mockRestore();
   });
 
-  it("saves a primary Gemini model and its automatic fallback preference", async () => {
+  it("offers the Walkmark Gemini models and persists their fallback preferences", async () => {
+    const fallbackByModel: Record<string, string> = {
+      "gemini-3.6-flash": "gemini-3.5-flash-lite",
+      "gemini-3.5-flash-lite": "gemini-3.6-flash",
+      "gemini-3.1-pro-preview": "gemini-3.6-flash",
+    };
     invoke.mockImplementation((command: string, args?: unknown) => {
       if (command === "list_projects") return Promise.resolve([project]);
       if (command === "get_active_project") return Promise.resolve(project);
       if (command === "get_gemini_model_settings") {
-        return Promise.resolve({ primaryModel: "gemini-4-hydrogen", fallbackModel: "gemini-3.8-flash", automaticFallback: true });
+        return Promise.resolve({ primaryModel: "gemini-3.6-flash", fallbackModel: "gemini-3.5-flash-lite", automaticFallback: true });
       }
       if (command === "save_gemini_model_settings") {
         const selected = args as { primaryModel: string; automaticFallback: boolean };
-        const alternate = selected.primaryModel === "gemini-4-hydrogen" ? "gemini-3.8-flash" : "gemini-4-hydrogen";
         return Promise.resolve({
           primaryModel: selected.primaryModel,
-          fallbackModel: selected.automaticFallback ? alternate : null,
+          fallbackModel: selected.automaticFallback ? fallbackByModel[selected.primaryModel] : null,
           automaticFallback: selected.automaticFallback,
         });
       }
@@ -121,15 +125,26 @@ describe("Screenstory desktop application", () => {
     });
     render(<App />);
     const modelSelect = await screen.findByRole("combobox", { name: "Primary Gemini model" });
-    fireEvent.change(modelSelect, { target: { value: "gemini-3.8-flash" } });
+    expect(screen.getByRole("option", { name: "Gemini 3.6 Flash" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Gemini 3.5 Flash Lite" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Gemini 3.1 Pro Preview — paid API tier" })).toBeTruthy();
+
+    fireEvent.change(modelSelect, { target: { value: "gemini-3.5-flash-lite" } });
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_gemini_model_settings", {
-      primaryModel: "gemini-3.8-flash",
+      primaryModel: "gemini-3.5-flash-lite",
       automaticFallback: true,
     }));
-    await waitFor(() => expect((modelSelect as HTMLSelectElement).value).toBe("gemini-3.8-flash"));
+    await waitFor(() => expect((modelSelect as HTMLSelectElement).value).toBe("gemini-3.5-flash-lite"));
+
+    fireEvent.change(modelSelect, { target: { value: "gemini-3.1-pro-preview" } });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_gemini_model_settings", {
+      primaryModel: "gemini-3.1-pro-preview",
+      automaticFallback: true,
+    }));
+
     fireEvent.click(screen.getByRole("checkbox", { name: "Automatically switch models after server errors" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_gemini_model_settings", {
-      primaryModel: "gemini-3.8-flash",
+      primaryModel: "gemini-3.1-pro-preview",
       automaticFallback: false,
     }));
   });

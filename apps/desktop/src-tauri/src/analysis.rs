@@ -21,8 +21,11 @@ use std::{
 use tauri::State;
 
 const GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
-const GEMINI_MODEL_HYDROGEN: &str = "gemini-4-hydrogen";
-const GEMINI_MODEL_FLASH: &str = "gemini-3.8-flash";
+const GEMINI_MODEL_FLASH: &str = "gemini-3.6-flash";
+const GEMINI_MODEL_FLASH_LITE: &str = "gemini-3.5-flash-lite";
+const GEMINI_MODEL_PRO: &str = "gemini-3.1-pro-preview";
+const LEGACY_GEMINI_MODEL_HYDROGEN: &str = "gemini-4-hydrogen";
+const LEGACY_GEMINI_MODEL_FLASH: &str = "gemini-3.8-flash";
 const MAX_FRAMES: usize = 30;
 const MAX_SUPPORTED_FRAMES: usize = 60;
 const MAX_INLINE_REQUEST_BYTES: usize = 12 * 1024 * 1024;
@@ -174,15 +177,39 @@ pub struct GeminiModelSettings {
 }
 
 fn is_supported_gemini_model(model: &str) -> bool {
-    model == GEMINI_MODEL_HYDROGEN || model == GEMINI_MODEL_FLASH
+    matches!(
+        model,
+        GEMINI_MODEL_FLASH | GEMINI_MODEL_FLASH_LITE | GEMINI_MODEL_PRO
+    )
 }
 
 fn alternate_gemini_model(model: &str) -> Option<&'static str> {
     match model {
-        GEMINI_MODEL_HYDROGEN => Some(GEMINI_MODEL_FLASH),
-        GEMINI_MODEL_FLASH => Some(GEMINI_MODEL_HYDROGEN),
+        GEMINI_MODEL_FLASH => Some(GEMINI_MODEL_FLASH_LITE),
+        GEMINI_MODEL_FLASH_LITE | GEMINI_MODEL_PRO => Some(GEMINI_MODEL_FLASH),
         _ => None,
     }
+}
+
+fn migrate_legacy_gemini_model_settings(
+    connection: &rusqlite::Connection,
+) -> Result<(), AppError> {
+    connection.execute(
+        "UPDATE gemini_model_settings
+         SET primary_model=?1
+         WHERE primary_model IN (?2, ?3)",
+        params![
+            GEMINI_MODEL_FLASH,
+            LEGACY_GEMINI_MODEL_HYDROGEN,
+            LEGACY_GEMINI_MODEL_FLASH
+        ],
+    ).map_err(|_| {
+        AppError::new(
+            "GEMINI_SETTINGS_MIGRATION_FAILED",
+            "The project's previous Gemini model preference could not be migrated.",
+        )
+    })?;
+    Ok(())
 }
 
 fn settings_from_connection(connection: &rusqlite::Connection) -> Result<GeminiModelSettings, AppError> {
@@ -234,7 +261,10 @@ pub fn save_gemini_model_settings(
     state: State<'_, AppState>,
 ) -> Result<GeminiModelSettings, AppError> {
     if !is_supported_gemini_model(&primary_model) {
-        return Err(AppError::new("GEMINI_MODEL_UNSUPPORTED", "Choose Gemini 4 Hydrogen or Gemini 3.8 Flash."));
+        return Err(AppError::new(
+            "GEMINI_MODEL_UNSUPPORTED",
+            "Choose Gemini 3.6 Flash, Gemini 3.5 Flash Lite, or Gemini 3.1 Pro Preview.",
+        ));
     }
     let project_dir = state.active_project.lock()
         .map_err(|_| AppError::new("STATE_LOCK_ERROR", "Project state is temporarily unavailable."))?
@@ -292,7 +322,7 @@ pub(super) fn ensure_analysis_table(project_dir: &Path) -> Result<(), AppError> 
             created_at TEXT NOT NULL,
             provider TEXT NOT NULL,
             model TEXT NOT NULL,
-            primary_model TEXT NOT NULL DEFAULT 'gemini-4-hydrogen',
+            primary_model TEXT NOT NULL DEFAULT 'gemini-3.6-flash',
             fallback_model TEXT,
             automatic_fallback INTEGER NOT NULL DEFAULT 1,
             completed_frames INTEGER NOT NULL DEFAULT 0,
@@ -335,8 +365,9 @@ pub(super) fn ensure_analysis_table(project_dir: &Path) -> Result<(), AppError> 
             automatic_fallback INTEGER NOT NULL DEFAULT 1
         );
         INSERT OR IGNORE INTO gemini_model_settings (id, primary_model, automatic_fallback)
-        VALUES (1, 'gemini-4-hydrogen', 1);"
+        VALUES (1, 'gemini-3.6-flash', 1);"
     ).map_err(|_| AppError::new("ANALYSIS_DATABASE_ERROR", "The Gemini model settings table could not be initialized."))?;
+    migrate_legacy_gemini_model_settings(&connection)?;
     Ok(())
 }
 
@@ -1273,12 +1304,24 @@ mod tests {
     }
 
     #[test]
-    fn supported_gemini_models_have_a_distinct_fallback_pair() {
-        assert!(is_supported_gemini_model("gemini-4-hydrogen"));
-        assert!(is_supported_gemini_model("gemini-3.8-flash"));
-        assert!(!is_supported_gemini_model("gemini-3.8-flash-preview"));
-        assert_eq!(alternate_gemini_model("gemini-4-hydrogen"), Some("gemini-3.8-flash"));
-        assert_eq!(alternate_gemini_model("gemini-3.8-flash"), Some("gemini-4-hydrogen"));
+    fn walkmark_gemini_models_are_supported_with_safe_fallback_pairs() {
+        assert!(is_supported_gemini_model(GEMINI_MODEL_FLASH));
+        assert!(is_supported_gemini_model(GEMINI_MODEL_FLASH_LITE));
+        assert!(is_supported_gemini_model(GEMINI_MODEL_PRO));
+        assert!(!is_supported_gemini_model(LEGACY_GEMINI_MODEL_HYDROGEN));
+        assert!(!is_supported_gemini_model(LEGACY_GEMINI_MODEL_FLASH));
+        assert_eq!(
+            alternate_gemini_model(GEMINI_MODEL_FLASH),
+            Some(GEMINI_MODEL_FLASH_LITE)
+        );
+        assert_eq!(
+            alternate_gemini_model(GEMINI_MODEL_FLASH_LITE),
+            Some(GEMINI_MODEL_FLASH)
+        );
+        assert_eq!(
+            alternate_gemini_model(GEMINI_MODEL_PRO),
+            Some(GEMINI_MODEL_FLASH)
+        );
         assert_eq!(alternate_gemini_model("unknown"), None);
     }
 
@@ -1291,7 +1334,7 @@ mod tests {
     }
 
     #[test]
-    fn project_gemini_settings_default_to_hydrogen_with_flash_fallback() {
+    fn project_gemini_settings_default_to_flash_with_the_expected_fallback() {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch(
             "CREATE TABLE gemini_model_settings (
@@ -1300,22 +1343,62 @@ mod tests {
                 automatic_fallback INTEGER NOT NULL DEFAULT 1
             );
             INSERT INTO gemini_model_settings (id, primary_model, automatic_fallback)
-            VALUES (1, 'gemini-4-hydrogen', 1);"
+            VALUES (1, 'gemini-3.6-flash', 1);"
         ).unwrap();
 
         let defaults = settings_from_connection(&connection).unwrap();
-        assert_eq!(defaults.primary_model, "gemini-4-hydrogen");
-        assert_eq!(defaults.fallback_model.as_deref(), Some("gemini-3.8-flash"));
+        assert_eq!(defaults.primary_model, GEMINI_MODEL_FLASH);
+        assert_eq!(defaults.fallback_model.as_deref(), Some(GEMINI_MODEL_FLASH_LITE));
         assert!(defaults.automatic_fallback);
+
+        for (primary, fallback) in [
+            (GEMINI_MODEL_FLASH_LITE, GEMINI_MODEL_FLASH),
+            (GEMINI_MODEL_PRO, GEMINI_MODEL_FLASH),
+        ] {
+            connection.execute(
+                "UPDATE gemini_model_settings SET primary_model=?1, automatic_fallback=1 WHERE id=1",
+                params![primary],
+            ).unwrap();
+            let saved = settings_from_connection(&connection).unwrap();
+            assert_eq!(saved.primary_model, primary);
+            assert_eq!(saved.fallback_model.as_deref(), Some(fallback));
+            assert!(saved.automatic_fallback);
+        }
 
         connection.execute(
             "UPDATE gemini_model_settings SET primary_model=?1, automatic_fallback=0 WHERE id=1",
-            params!["gemini-3.8-flash"],
+            params![GEMINI_MODEL_FLASH_LITE],
         ).unwrap();
         let saved = settings_from_connection(&connection).unwrap();
-        assert_eq!(saved.primary_model, "gemini-3.8-flash");
+        assert_eq!(saved.primary_model, GEMINI_MODEL_FLASH_LITE);
         assert_eq!(saved.fallback_model, None);
         assert!(!saved.automatic_fallback);
+    }
+
+    #[test]
+    fn legacy_project_gemini_preferences_migrate_to_gemini_36_flash() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.execute_batch(
+            "CREATE TABLE gemini_model_settings (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                primary_model TEXT NOT NULL,
+                automatic_fallback INTEGER NOT NULL DEFAULT 1
+            );"
+        ).unwrap();
+
+        for legacy_model in [
+            LEGACY_GEMINI_MODEL_HYDROGEN,
+            LEGACY_GEMINI_MODEL_FLASH,
+        ] {
+            connection.execute(
+                "INSERT OR REPLACE INTO gemini_model_settings (id, primary_model, automatic_fallback)
+                 VALUES (1, ?1, 1)",
+                params![legacy_model],
+            ).unwrap();
+            migrate_legacy_gemini_model_settings(&connection).unwrap();
+            let settings = settings_from_connection(&connection).unwrap();
+            assert_eq!(settings.primary_model, GEMINI_MODEL_FLASH);
+        }
     }
 
     #[test]

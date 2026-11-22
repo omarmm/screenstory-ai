@@ -103,8 +103,8 @@ export default function App() {
   const [geminiKeyConfigured, setGeminiKeyConfigured] = useState(false);
   const [geminiKeyInput, setGeminiKeyInput] = useState("");
   const [geminiModelSettings, setGeminiModelSettings] = useState<GeminiModelSettings>({
-    primaryModel: "gemini-4-hydrogen",
-    fallbackModel: "gemini-3.8-flash",
+    primaryModel: "gemini-3.6-flash",
+    fallbackModel: "gemini-3.5-flash-lite",
     automaticFallback: true,
   });
   const [geminiSettingsBusy, setGeminiSettingsBusy] = useState(false);
@@ -206,8 +206,8 @@ export default function App() {
       setGeminiModelSettings(modelSettings);
     } else {
       setGeminiModelSettings({
-        primaryModel: "gemini-4-hydrogen",
-        fallbackModel: "gemini-3.8-flash",
+        primaryModel: "gemini-3.6-flash",
+        fallbackModel: "gemini-3.5-flash-lite",
         automaticFallback: true,
       });
     }
@@ -427,6 +427,9 @@ export default function App() {
     const megabytes = (activeAnalysis.totalBytes / (1024 * 1024)).toFixed(2);
     const approved = window.confirm(
       "Send " + activeAnalysis.completedFrames + " sampled JPEG frames (" + megabytes + " MiB) and the optional workflow description to Google Gemini?\n\nPrimary model: " + activeAnalysis.primaryModel +
+      (activeAnalysis.primaryModel === "gemini-3.1-pro-preview"
+        ? "\nBilling notice: Gemini 3.1 Pro Preview requires a paid Gemini API tier; it is not available on the Free tier."
+        : "") +
       (activeAnalysis.automaticFallback && activeAnalysis.fallbackModel
         ? "\nAutomatic server-error fallback: " + activeAnalysis.fallbackModel
         : "\nAutomatic model fallback: disabled") +
@@ -781,8 +784,9 @@ export default function App() {
                     disabled={geminiSettingsBusy || analysisBusy}
                     onChange={(event) => void saveGeminiModelSettings(event.target.value, geminiModelSettings.automaticFallback)}
                   >
-                    <option value="gemini-4-hydrogen">Gemini 4 Hydrogen</option>
-                    <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+                    <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
+                    <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>
+                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview — paid API tier</option>
                   </select>
                   <label className="gemini-fallback-toggle">
                     <input
@@ -819,7 +823,7 @@ export default function App() {
                   </>}
                   {activeAnalysis.status === "awaiting_cloud_consent" && <>
                     <p>Local frame preparation is complete. No data has been sent yet.</p>
-                    <div className="consent-details"><strong>Transfer review</strong><span>Provider: Google Gemini</span><span>Primary model: {activeAnalysis.primaryModel}</span><span>Fallback model: {activeAnalysis.automaticFallback ? activeAnalysis.fallbackModel : "Disabled"}</span><span>Recording: {activeAnalysis.sourceFileName} · {formatDuration(activeAnalysis.durationSeconds ?? 0)}</span><span>Sampled frames: {activeAnalysis.completedFrames} · {(activeAnalysis.totalBytes / (1024 * 1024)).toFixed(2)} MiB</span><span>Workflow text: {activeAnalysis.workflowDescription.trim() ? "Included" : "None"}</span><b>Only sampled frames and the optional text are sent. The original MP4 is not uploaded.</b><small>Frames can still contain private information. Automatic redaction is not guaranteed.</small></div>
+                    <div className="consent-details"><strong>Transfer review</strong><span>Provider: Google Gemini</span><span>Primary model: {activeAnalysis.primaryModel}</span>{activeAnalysis.primaryModel === "gemini-3.1-pro-preview" && <span>Billing: paid Gemini API tier required; not included in the Free tier.</span>}<span>Fallback model: {activeAnalysis.automaticFallback ? activeAnalysis.fallbackModel : "Disabled"}</span><span>Recording: {activeAnalysis.sourceFileName} · {formatDuration(activeAnalysis.durationSeconds ?? 0)}</span><span>Sampled frames: {activeAnalysis.completedFrames} · {(activeAnalysis.totalBytes / (1024 * 1024)).toFixed(2)} MiB</span><span>Workflow text: {activeAnalysis.workflowDescription.trim() ? "Included" : "None"}</span><b>Only sampled frames and the optional text are sent. The original MP4 is not uploaded.</b><small>Frames can still contain private information. Automatic redaction is not guaranteed.</small></div>
                     <div className="analysis-actions"><button className="primary-button" onClick={() => void sendAnalysisToGemini()} disabled={!geminiKeyConfigured || analysisBusy}>Approve & send frames to Gemini</button><button className="secondary-button" onClick={() => void cancelAnalysis()}>Cancel run</button></div>
                     {!geminiKeyConfigured && <small>Save a Gemini API key above before approving the transfer.</small>}
                   </>}

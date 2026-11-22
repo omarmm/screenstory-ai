@@ -44,8 +44,9 @@ This milestone creates AI-generated content. It does not yet deliver the full ti
 ### 2.3 Provider and request contract
 
 - The initial provider is Gemini. Domain, extraction, validation, and timeline code depend on a provider-independent contract; Gemini request/response types remain inside the adapter.
-- Use the Gemini Interactions API for the initial integration. The default primary model is `gemini-4-hydrogen`; `gemini-3.8-flash` is the supported stable multimodal alternative. Each project stores its primary-model selection and whether automatic server-error fallback is enabled.
-- If the selected primary model exhausts retries with HTTP 5xx responses, Screenstory may automatically try the alternate approved Gemini model. Do not switch models for HTTP 429 quota/rate limits, authentication/permission failures, invalid requests, or network failures. Record each model attempt and the final model used for the analysis.
+- Use the Gemini Interactions API for the initial integration. The default primary model is `gemini-3.6-flash`. The supported model choices mirror Walkmark's Gemini catalog: `gemini-3.6-flash`, `gemini-3.5-flash-lite`, and `gemini-3.1-pro-preview`. Google currently lists the first two with a Free API tier; `gemini-3.1-pro-preview` requires a paid Gemini API tier. The UI and cloud-transfer consent must disclose that paid-tier requirement before a Pro request is sent.
+- Each project stores its primary-model selection and whether automatic server-error fallback is enabled. The single approved fallback is `gemini-3.5-flash-lite` for `gemini-3.6-flash`, and `gemini-3.6-flash` for either `gemini-3.5-flash-lite` or `gemini-3.1-pro-preview`. This avoids automatically escalating a Free-tier Flash request to a paid-only Pro model.
+- If the selected primary model exhausts retries with HTTP 5xx responses, Screenstory may automatically try its one approved fallback model. Do not switch models for HTTP 429 quota/rate limits, authentication/permission failures, invalid requests, or network failures. Record each model attempt and the final model used for the analysis.
 - Use structured output with a JSON schema and validate the returned JSON again in the Rust domain layer.
 - Use inline JPEG frame data; do not use the Gemini Files API for the first slice.
 - Set `store=false` for every analysis request so the interaction is not retained as server-side conversation state. Do not use server-side previous-interaction chaining.
@@ -174,7 +175,7 @@ Implementation must re-verify the live API contract during integration. The init
 - Interactions API: https://ai.google.dev/gemini-api/docs/interactions — documented as the recommended interface for new projects; stateless requests support `store=false`.
 - Image understanding: https://ai.google.dev/gemini-api/docs/image-understanding — documents inline base64 image input and a 20 MB total inline request limit.
 - Structured output: https://ai.google.dev/gemini-api/docs/structured-output — documents JSON-schema constrained structured responses.
-- Models: https://ai.google.dev/gemini-api/docs/models — lists `gemini-4-hydrogen` as a supported multimodal model.
+- Models and pricing: https://ai.google.dev/gemini-api/docs/pricing — lists the selected Gemini model IDs and their current Free/Paid tier availability.
 - API keys: https://ai.google.dev/gemini-api/docs/api-key — documents Gemini API key handling and the transition to authorization keys.
 
 This snapshot is a design reference, not a promise that external model availability, limits, or billing policies remain unchanged.

@@ -59,7 +59,9 @@ Verification:
 - Target-device Gemini analysis on 0.5.3 returned HTTP 503 (`service_unavailable`) on all three attempts, each with `Retry-After: 30`; no successful Gemini analysis has been verified.
 - The previous retry helper capped provider-requested delays at 15 seconds. The corrected helper waits the full numeric `Retry-After` value up to 60 seconds, defers instead of retrying early for longer or unparseable values, and checks cancellation during the wait.
 - Target-device verification after rebuilding from commit `2a0aef3` measured 31.334 and 31.642 seconds between attempts when Google returned `Retry-After: 30`; retry timing is verified, although Gemini still returned HTTP 503.
-- Source now includes project-specific Gemini model selection and automatic fallback from `gemini-4-hydrogen` to `gemini-3.8-flash` after exhausted HTTP 5xx retries. It does not fail over on quota/rate-limit, authentication, invalid-request, or network errors. The model-selection/fallback change is not yet locally tested or packaged.
+- Source now offers the three Gemini models used by Walkmark: `gemini-3.6-flash` (default), `gemini-3.5-flash-lite`, and `gemini-3.1-pro-preview`. Google currently lists the two Flash models on its Free API tier; Pro Preview requires a paid Gemini API tier and is disclosed in the selector and transfer consent.
+- Automatic fallback remains limited to exhausted HTTP 5xx retries: 3.6 Flash falls back to 3.5 Flash Lite; 3.5 Flash Lite and 3.1 Pro Preview fall back to 3.6 Flash. It does not fail over on quota/rate-limit, authentication, invalid-request, or network errors. Existing project preferences for the retired Screenstory model IDs migrate to 3.6 Flash without rewriting historical analysis records.
+- This Gemini catalog update, migration, and UI test change are not yet locally tested, formatted, linted, packaged, or verified against the user's API key. A local build and real API test remain pending; GitHub Actions was not run.
 
 ## M4 — Versioned timeline and step editing
 
