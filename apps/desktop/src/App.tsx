@@ -619,7 +619,8 @@ export default function App() {
   }
   function applyStyleToAllCaptions() {
     if (!timeline || timeline.annotations.length === 0) return;
-    const fontSize = Math.min(72, Math.max(12, Math.round(bulkCaptionFontSize)));
+    const requestedFontSize = Number.isFinite(bulkCaptionFontSize) ? Math.round(bulkCaptionFontSize) : 44;
+    const fontSize = Math.min(72, Math.max(12, requestedFontSize));
     const background = colorWithOpacity(bulkCaptionBackgroundColor, bulkCaptionBackgroundOpacity);
     setTimeline((current) => current ? {
       ...current,
