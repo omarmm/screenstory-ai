@@ -371,6 +371,10 @@ fn update_render_run(project_dir: &Path, run_id: &str, status: &str, progress: u
     }
 }
 
+fn detach_child_stdin(command: &mut Command) {
+    command.stdin(Stdio::null());
+}
+
 fn available_space_bytes(path: &Path) -> Result<u64, AppError> {
     let output = Command::new("df")
         .args(["--output=avail", "-k"])
@@ -582,12 +586,14 @@ fn render_worker(
         let filters = render_filter(&request, ass_path.as_deref());
         let partial = request.output_dir.join(format!("{run_id}.partial.mp4"));
         let mut command = Command::new("ffmpeg");
-        command.args(["-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(&request.recording_path)
+        command.args(["-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i"]).arg(&request.recording_path)
             .args(["-map", "0:v:0", "-map", "0:a?", "-vf", &filters,
                 "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
                 "-progress", "pipe:1", "-stats_period", "0.5"])
-            .arg(&partial).stdout(Stdio::piped()).stderr(Stdio::piped());
+            .arg(&partial);
+        detach_child_stdin(&mut command);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -869,6 +875,17 @@ mod tests {
         let ten_seconds = 10_u64.saturating_mul(1024 * 1024).saturating_add(256 * 1024 * 1024);
         assert_eq!(one_second, 269_484_032);
         assert_eq!(ten_seconds - one_second, 9 * 1024 * 1024);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_child_stdin_is_not_a_terminal_and_returns_eof() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "test ! -t 0 && ! read -r value"]);
+        detach_child_stdin(&mut command);
+
+        let status = command.status().expect("shell should start");
+        assert!(status.success(), "child stdin must be detached from the terminal");
     }
 
     #[test]
