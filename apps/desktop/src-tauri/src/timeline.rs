@@ -36,6 +36,8 @@ pub struct TimelineDocument {
     pub zoom_segments: Vec<TimelineZoomSegment>,
     #[serde(default)]
     pub annotations: Vec<TimelineAnnotation>,
+    #[serde(default)]
+    pub caption_generation_version: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -356,6 +358,13 @@ pub(super) fn validate_timeline(
                 && color.starts_with('#')
                 && color[1..].chars().all(|character| character.is_ascii_hexdigit())
         };
+        let horizontal_out_of_bounds = if annotation.alignment == "center" {
+            annotation.max_width > 1.0
+                || annotation.x < annotation.max_width / 2.0
+                || annotation.x > 1.0 - annotation.max_width / 2.0
+        } else {
+            annotation.x + annotation.max_width > 1.0
+        };
         if annotation.id.trim().is_empty()
             || annotation.id.len() > 128
             || !annotation_ids.insert(annotation.id.as_str())
@@ -371,14 +380,14 @@ pub(super) fn validate_timeline(
             || annotation.x < 0.0
             || annotation.y < 0.0
             || annotation.max_width <= 0.0
-            || annotation.x + annotation.max_width > 1.0
+            || horizontal_out_of_bounds
             || annotation.y >= 1.0
             || !(12..=72).contains(&annotation.font_size)
             || !valid_color(&annotation.foreground)
             || !valid_color(&annotation.background)
             || !["left", "center", "right"].contains(&annotation.alignment.as_str())
             || !["rtl", "ltr", "auto"].contains(&annotation.direction.as_str())
-            || annotation.origin != "manual"
+            || !["ai", "manual"].contains(&annotation.origin.as_str())
         {
             return Err(AppError::new(
                 "TIMELINE_ANNOTATION_INVALID",
@@ -462,6 +471,121 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
     Ok(())
 }
 
+fn is_arabic_script_character(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x0600..=0x06FF
+            | 0x0750..=0x077F
+            | 0x08A0..=0x08FF
+            | 0xFB50..=0xFDFF
+            | 0xFE70..=0xFEFF
+    )
+}
+
+fn annotations_from_steps(
+    steps: &[TimelineStep],
+    fallback_language: &str,
+) -> Vec<TimelineAnnotation> {
+    steps
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| {
+            let text = step.title.trim();
+            if text.is_empty() {
+                return None;
+            }
+
+            let has_arabic = text.chars().any(is_arabic_script_character);
+            let has_latin = text.chars().any(|character| character.is_ascii_alphabetic());
+            let language = match (has_arabic, has_latin) {
+                (true, true) => "mixed",
+                (true, false) => "ar",
+                (false, true) => "en",
+                (false, false) => match fallback_language {
+                    "ar" => "ar",
+                    "en" => "en",
+                    _ => "mixed",
+                },
+            };
+            let direction = if has_arabic {
+                "rtl"
+            } else if has_latin {
+                "ltr"
+            } else if fallback_language == "ar" {
+                "rtl"
+            } else {
+                "ltr"
+            };
+            Some(TimelineAnnotation {
+                id: format!("annotation-step-{}", index + 1),
+                text: text.to_string(),
+                language: language.to_string(),
+                start_ms: step.start_ms,
+                end_ms: step.end_ms,
+                x: 0.5,
+                y: 0.92,
+                max_width: 0.84,
+                font_size: 44,
+                foreground: "#FFFFFF".to_string(),
+                background: "#000000B3".to_string(),
+                alignment: "center".to_string(),
+                direction: direction.to_string(),
+                origin: "ai".to_string(),
+            })
+        })
+        .collect()
+}
+
+fn has_legacy_default_caption_style(annotation: &TimelineAnnotation) -> bool {
+    (annotation.x == 0.08 || annotation.x == 0.92)
+        && annotation.y == 0.82
+        && annotation.max_width == 0.84
+        && annotation.font_size == 26
+        && annotation.foreground == "#FFFFFF"
+        && annotation.background == "#000000CC"
+        && ((annotation.direction == "rtl" && annotation.alignment == "right")
+            || (annotation.direction != "rtl" && annotation.alignment == "left"))
+}
+
+fn ensure_automatic_captions(timeline: &mut TimelineDocument) -> bool {
+    const CAPTION_STYLE_VERSION: u32 = 2;
+    if timeline.caption_generation_version >= CAPTION_STYLE_VERSION {
+        return false;
+    }
+
+    let generated = annotations_from_steps(&timeline.steps, &timeline.language);
+    for annotation in generated {
+        if let Some(existing) = timeline.annotations.iter_mut()
+            .find(|existing| existing.id == annotation.id)
+        {
+            // Upgrade only untouched captions created by the previous automatic style.
+            // Any user-customized caption keeps its own formatting and text.
+            if existing.origin == "ai" && has_legacy_default_caption_style(existing) {
+                existing.x = annotation.x;
+                existing.y = annotation.y;
+                existing.max_width = annotation.max_width;
+                existing.font_size = annotation.font_size;
+                existing.foreground = annotation.foreground;
+                existing.background = annotation.background;
+                existing.alignment = annotation.alignment;
+                // Keep the existing text's language and reading direction.
+                // This migration changes visual presentation only.
+            }
+            continue;
+        }
+
+        let already_covered = timeline.annotations.iter().any(|existing| {
+            existing.start_ms == annotation.start_ms
+                && existing.end_ms == annotation.end_ms
+        });
+        if !already_covered {
+            timeline.annotations.push(annotation);
+        }
+    }
+    timeline.caption_generation_version = CAPTION_STYLE_VERSION;
+    true
+}
+
 #[tauri::command]
 pub fn create_timeline_from_draft(
     run_id: String,
@@ -516,6 +640,19 @@ pub fn create_timeline_from_draft(
         AppError::new("ANALYSIS_DRAFT_NOT_FOUND", "The tutorial draft could not be read.")
     })?).map_err(|_| AppError::new("ANALYSIS_DRAFT_INVALID", "The tutorial draft is invalid."))?;
 
+    let steps = draft.steps.into_iter().map(|step| TimelineStep {
+        id: step.id,
+        title: step.title,
+        description: step.description,
+        start_ms: step.start_ms,
+        end_ms: step.end_ms,
+        origin: "ai".to_string(),
+        evidence_frame_ids: step.evidence_frame_ids,
+        confidence: Some(step.confidence),
+        evidence_kind: Some(step.evidence_kind),
+    }).collect::<Vec<_>>();
+    let annotations = annotations_from_steps(&steps, &draft.language);
+
     let created_at_ms = now_ms();
     let timeline_id = format!("t{}-{}", created_at_ms, std::process::id());
     let timeline = TimelineDocument {
@@ -530,17 +667,7 @@ pub fn create_timeline_from_draft(
         updated_at_ms: created_at_ms,
         status: "draft".to_string(),
         language: draft.language.clone(),
-        steps: draft.steps.into_iter().map(|step| TimelineStep {
-            id: step.id,
-            title: step.title,
-            description: step.description,
-            start_ms: step.start_ms,
-            end_ms: step.end_ms,
-            origin: "ai".to_string(),
-            evidence_frame_ids: step.evidence_frame_ids,
-            confidence: Some(step.confidence),
-            evidence_kind: Some(step.evidence_kind),
-        }).collect(),
+        steps,
         zoom_segments: draft.zoom_suggestions.into_iter().map(|zoom| TimelineZoomSegment {
             id: zoom.id,
             start_ms: zoom.start_ms,
@@ -556,7 +683,8 @@ pub fn create_timeline_from_draft(
             approval_status: "pending".to_string(),
             transition_duration_ms: 250,
         }).collect(),
-        annotations: Vec::new(),
+        annotations,
+        caption_generation_version: 2,
     };
     validate_timeline(&timeline, &manifest)?;
     let relative_snapshot = format!("{}/revision-1.json", timeline_id);
@@ -624,8 +752,12 @@ pub fn get_timeline_for_recording(
     let migrated = migrate_v1_timeline(&mut value)?;
     let mut timeline: TimelineDocument = serde_json::from_value(value)
         .map_err(|_| AppError::new("TIMELINE_SNAPSHOT_INVALID", "The current timeline snapshot is invalid."))?;
+    let mut updated = migrated;
+    if ensure_automatic_captions(&mut timeline) {
+        updated = true;
+    }
     let (_, manifest) = source_manifest(&project_dir, &run_id)?;
-    if migrated {
+    if updated {
         timeline.revision = revision as u64 + 1;
         timeline.updated_at_ms = now_ms();
         let next_name = format!("revision-{}.json", timeline.revision);
@@ -646,7 +778,7 @@ pub fn get_timeline_for_recording(
         }
     }
     validate_timeline(&timeline, &manifest)?;
-    if timeline.timeline_id != timeline_id || timeline.revision != (revision as u64 + u64::from(migrated)) || timeline.recording_id != recording_id {
+    if timeline.timeline_id != timeline_id || timeline.revision != (revision as u64 + u64::from(updated)) || timeline.recording_id != recording_id {
         return Err(AppError::new("TIMELINE_INDEX_MISMATCH", "The current timeline snapshot does not match the project index."));
     }
     Ok(Some(timeline))
@@ -706,6 +838,7 @@ pub fn save_timeline(
         AppError::new("TIMELINE_NOT_FOUND", "The previous timeline revision could not be read.")
     })?).map_err(|_| AppError::new("TIMELINE_SNAPSHOT_INVALID", "The previous timeline revision is invalid."))?;
     timeline.created_at_ms = previous.created_at_ms;
+    timeline.caption_generation_version = previous.caption_generation_version;
     timeline.updated_at_ms = now_ms();
     timeline.revision = expected_revision + 1;
     validate_timeline(&timeline, &manifest)?;
@@ -779,7 +912,140 @@ mod tests {
             }],
             zoom_segments: vec![],
             annotations: vec![],
+            caption_generation_version: 1,
         }
+    }
+
+    #[test]
+    fn ai_step_titles_become_timed_editable_captions_automatically() {
+        let mut steps = example_timeline().steps;
+        steps[0].title = "إدخال رقم الهاتف".to_string();
+
+        let mut english_step = steps[0].clone();
+        english_step.id = "step-2".to_string();
+        english_step.title = "Confirm the code".to_string();
+        english_step.start_ms = 1500;
+        english_step.end_ms = 2500;
+        steps.push(english_step);
+
+        let annotations = annotations_from_steps(&steps, "auto");
+
+        assert_eq!(annotations.len(), 2);
+        assert_eq!(annotations[0].text, "إدخال رقم الهاتف");
+        assert_eq!(annotations[0].start_ms, steps[0].start_ms);
+        assert_eq!(annotations[0].end_ms, steps[0].end_ms);
+        assert_eq!(annotations[0].language, "ar");
+        assert_eq!(annotations[0].direction, "rtl");
+        assert_eq!(annotations[0].alignment, "center");
+        assert_eq!(annotations[0].x, 0.5);
+        assert_eq!(annotations[0].y, 0.92);
+        assert_eq!(annotations[0].max_width, 0.84);
+        assert_eq!(annotations[0].font_size, 44);
+        assert_eq!(annotations[0].background, "#000000B3");
+        assert_eq!(annotations[0].origin, "ai");
+
+        assert_eq!(annotations[1].text, "Confirm the code");
+        assert_eq!(annotations[1].start_ms, steps[1].start_ms);
+        assert_eq!(annotations[1].end_ms, steps[1].end_ms);
+        assert_eq!(annotations[1].language, "en");
+        assert_eq!(annotations[1].direction, "ltr");
+        assert_eq!(annotations[1].alignment, "center");
+        assert_eq!(annotations[1].x, 0.5);
+        assert_eq!(annotations[1].y, 0.92);
+        assert_eq!(annotations[1].font_size, 44);
+        assert_eq!(annotations[1].origin, "ai");
+        assert!(validate_timeline(
+            &TimelineDocument {
+                annotations,
+                steps,
+                ..example_timeline()
+            },
+            &example_manifest(),
+        ).is_ok());
+    }
+
+    #[test]
+    fn existing_timelines_receive_captions_once_without_overwriting_manual_captions() {
+        let mut timeline = example_timeline();
+        timeline.caption_generation_version = 0;
+        timeline.annotations.push(TimelineAnnotation {
+            id: "manual-caption".to_string(),
+            text: "My own caption".to_string(),
+            language: "en".to_string(),
+            start_ms: 2000,
+            end_ms: 3000,
+            x: 0.08,
+            y: 0.08,
+            max_width: 0.84,
+            font_size: 24,
+            foreground: "#FFFFFF".to_string(),
+            background: "#000000CC".to_string(),
+            alignment: "left".to_string(),
+            direction: "ltr".to_string(),
+            origin: "manual".to_string(),
+        });
+
+        assert!(ensure_automatic_captions(&mut timeline));
+        assert_eq!(timeline.caption_generation_version, 2);
+        assert_eq!(timeline.annotations.len(), 2);
+        assert_eq!(timeline.annotations[0].id, "manual-caption");
+        assert_eq!(timeline.annotations[1].text, "Open settings");
+        assert_eq!(timeline.annotations[1].origin, "ai");
+
+        timeline.annotations.clear();
+        assert!(!ensure_automatic_captions(&mut timeline));
+        assert!(timeline.annotations.is_empty());
+    }
+
+    #[test]
+    fn legacy_generated_captions_upgrade_to_centered_large_subtitle_style() {
+        let mut timeline = example_timeline();
+        timeline.caption_generation_version = 1;
+        timeline.annotations.push(TimelineAnnotation {
+            id: "annotation-step-1".to_string(),
+            text: "افتح الإعدادات".to_string(),
+            language: "ar".to_string(),
+            start_ms: 0,
+            end_ms: 1000,
+            x: 0.08,
+            y: 0.82,
+            max_width: 0.84,
+            font_size: 26,
+            foreground: "#FFFFFF".to_string(),
+            background: "#000000CC".to_string(),
+            alignment: "right".to_string(),
+            direction: "rtl".to_string(),
+            origin: "ai".to_string(),
+        });
+
+        assert!(ensure_automatic_captions(&mut timeline));
+        let caption = &timeline.annotations[0];
+        assert_eq!(caption.text, "افتح الإعدادات");
+        assert_eq!(caption.start_ms, 0);
+        assert_eq!(caption.end_ms, 1000);
+        assert_eq!(caption.x, 0.5);
+        assert_eq!(caption.y, 0.92);
+        assert_eq!(caption.max_width, 0.84);
+        assert_eq!(caption.font_size, 44);
+        assert_eq!(caption.background, "#000000B3");
+        assert_eq!(caption.alignment, "center");
+        assert_eq!(caption.direction, "rtl");
+        assert_eq!(timeline.caption_generation_version, 2);
+    }
+
+    #[test]
+    fn customized_legacy_generated_caption_keeps_user_formatting() {
+        let mut timeline = example_timeline();
+        timeline.caption_generation_version = 1;
+        let mut caption = annotations_from_steps(&timeline.steps, "en").remove(0);
+        caption.font_size = 31;
+        caption.x = 0.22;
+        timeline.annotations.push(caption);
+
+        assert!(ensure_automatic_captions(&mut timeline));
+        assert_eq!(timeline.annotations[0].font_size, 31);
+        assert_eq!(timeline.annotations[0].x, 0.22);
+        assert_eq!(timeline.annotations[0].alignment, "center");
     }
 
     #[test]
@@ -835,6 +1101,34 @@ mod tests {
         timeline.zoom_segments[0].approval_status = "pending".to_string();
         timeline.zoom_segments[1].approval_status = "pending".to_string();
         assert!(validate_timeline(&timeline, &example_manifest()).is_ok());
+    }
+
+    #[test]
+    fn centered_subtitle_anchor_validates_using_its_center_and_safe_width() {
+        let mut timeline = example_timeline();
+        timeline.annotations.push(TimelineAnnotation {
+            id: "center-caption".to_string(),
+            text: "Centered subtitle".to_string(),
+            language: "en".to_string(),
+            start_ms: 0,
+            end_ms: 1000,
+            x: 0.5,
+            y: 0.92,
+            max_width: 0.84,
+            font_size: 44,
+            foreground: "#FFFFFF".to_string(),
+            background: "#000000B3".to_string(),
+            alignment: "center".to_string(),
+            direction: "ltr".to_string(),
+            origin: "ai".to_string(),
+        });
+        assert!(validate_timeline(&timeline, &example_manifest()).is_ok());
+
+        timeline.annotations[0].x = 0.4;
+        assert_eq!(
+            validate_timeline(&timeline, &example_manifest()).unwrap_err().code,
+            "TIMELINE_ANNOTATION_INVALID"
+        );
     }
 
     #[test]

@@ -327,7 +327,12 @@ fn escape_ass_text(value: &str, direction: &str) -> String {
 }
 
 fn ass_alignment(value: &str) -> u8 {
-    match value { "left" => 7, "right" => 9, _ => 8 }
+    match value {
+        "left" => 7,
+        "right" => 9,
+        "center" => 2,
+        _ => 8,
+    }
 }
 
 fn generate_ass(document: &timeline::TimelineDocument, width: u32, height: u32) -> Result<String, AppError> {
@@ -339,12 +344,19 @@ fn generate_ass(document: &timeline::TimelineDocument, width: u32, height: u32) 
     for item in annotations {
         let x = (item.x * width as f64).round() as u32;
         let y = (item.y * height as f64).round() as u32;
-        let left = (item.x * width as f64).round() as u32;
-        let right = ((1.0 - item.x - item.max_width) * width as f64).round() as u32;
+        let (left, right) = if item.alignment == "center" {
+            let margin = (((1.0 - item.max_width) / 2.0) * width as f64).round() as u32;
+            (margin, margin)
+        } else {
+            (
+                (item.x * width as f64).round() as u32,
+                ((1.0 - item.x - item.max_width) * width as f64).round() as u32,
+            )
+        };
         let font = if item.language == "en" { "Noto Sans" } else { "Noto Sans Arabic" };
         let foreground = ass_color(&item.foreground)?;
         let background = ass_color(&item.background)?;
-        let tags = format!("{{\\an{}\\pos({x},{y})\\fs{}\\fn{font}\\1c{foreground}\\4c{background}\\bord0\\shad0}}",
+        let tags = format!("{{\\an{}\\pos({x},{y})\\fs{}\\b1\\fn{font}\\1c{foreground}\\4c{background}\\bord10\\shad0}}",
             ass_alignment(&item.alignment), item.font_size);
         let text = escape_ass_text(&item.text, &item.direction);
         ass.push_str(&format!("Dialogue: 0,{},{},Default,,{left},{right},0,,{tags}{text}\n",
@@ -369,6 +381,10 @@ fn update_render_run(project_dir: &Path, run_id: &str, status: &str, progress: u
             params![status, progress as i64, size as i64, output.map(|p| p.to_string_lossy().to_string()), error, run_id],
         );
     }
+}
+
+fn detach_child_stdin(command: &mut Command) {
+    command.stdin(Stdio::null());
 }
 
 fn available_space_bytes(path: &Path) -> Result<u64, AppError> {
@@ -582,12 +598,14 @@ fn render_worker(
         let filters = render_filter(&request, ass_path.as_deref());
         let partial = request.output_dir.join(format!("{run_id}.partial.mp4"));
         let mut command = Command::new("ffmpeg");
-        command.args(["-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(&request.recording_path)
+        command.args(["-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i"]).arg(&request.recording_path)
             .args(["-map", "0:v:0", "-map", "0:a?", "-vf", &filters,
                 "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
                 "-progress", "pipe:1", "-stats_period", "0.5"])
-            .arg(&partial).stdout(Stdio::piped()).stderr(Stdio::piped());
+            .arg(&partial);
+        detach_child_stdin(&mut command);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -871,6 +889,17 @@ mod tests {
         assert_eq!(ten_seconds - one_second, 9 * 1024 * 1024);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn detached_child_stdin_is_not_a_terminal_and_returns_eof() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "test ! -t 0 && ! read -r value"]);
+        detach_child_stdin(&mut command);
+
+        let status = command.status().expect("shell should start");
+        assert!(status.success(), "child stdin must be detached from the terminal");
+    }
+
     #[test]
     fn ffmpeg_progress_time_and_frame_rate_are_parsed() {
         assert_eq!(parse_progress_time("12000000"), Some(12000));
@@ -923,6 +952,7 @@ mod tests {
                 direction: "rtl".into(),
                 origin: "manual".into(),
             }],
+            caption_generation_version: 1,
         };
         let ass_path = root.join("captions.ass");
         fs::write(&ass_path, generate_ass(&doc, 320, 180).unwrap()).unwrap();
@@ -980,11 +1010,27 @@ mod tests {
                 foreground: "#FFFFFF".into(), background: "#000000CC".into(), alignment: "right".into(),
                 direction: "rtl".into(), origin: "manual".into(),
             }],
+            caption_generation_version: 1,
         };
         let ass = generate_ass(&document, 1920, 1080).unwrap();
         assert!(ass.contains("PlayResX: 1920"));
         assert!(ass.contains("Dialogue: 0,0:00:00.50,0:00:02.00"));
         assert!(ass.contains("اضغط على الإعدادات"));
         assert!(ass.contains("\\an9"));
+        assert!(ass.contains("\\b1"));
+        assert!(ass.contains("\\bord10"));
+
+        let mut centered = document.clone();
+        let caption = &mut centered.annotations[0];
+        caption.x = 0.5;
+        caption.y = 0.92;
+        caption.max_width = 0.84;
+        caption.font_size = 44;
+        caption.background = "#000000B3".into();
+        caption.alignment = "center".into();
+        let centered_ass = generate_ass(&centered, 1920, 1080).unwrap();
+        assert!(centered_ass.contains("\\an2\\pos(960,994)\\fs44\\b1"));
+        assert!(centered_ass.contains(",154,154,0,,"));
+        assert!(centered_ass.contains("\\bord10"));
     }
 }

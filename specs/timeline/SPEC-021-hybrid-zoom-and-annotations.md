@@ -22,7 +22,7 @@ Add editable zoom segments and text annotations to the versioned timeline withou
 
 ## 3. Annotation model
 
-- Annotation fields: stable ID, text, language (`ar`, `en`, `mixed`), start/end ms, normalized x/y anchor, max width fraction, font size, foreground/background, alignment, origin (`manual`), and direction (`rtl`/`ltr`/`auto`).
+- Annotation fields: stable ID, text, language (`ar`, `en`, `mixed`), start/end ms, normalized x/y anchor, max width fraction, font size, foreground/background, alignment, origin (`ai` for automatically generated step captions or `manual` for user-created captions), and direction (`rtl`/`ltr`/`auto`).
 - Text limit 500 characters; no control characters except line breaks and tab.
 - Position and width must be finite and fully contained in normalized frame bounds.
 - Time range must be inside the source duration.
@@ -63,3 +63,26 @@ Add editable zoom segments and text annotations to the versioned timeline withou
 ## 7. Out of scope
 
 Video rendering implementation, speech transcription, voice-over, remote project sync, and Wayland recording.
+
+
+## Amendment — Automatic captions from AI tutorial steps
+
+**Decision:** Captions are generated automatically when a completed AI analysis draft is converted into its first editable timeline. No user action or separate generation button is required.
+
+- Create one editable AI-origin annotation from each non-empty AI tutorial-step title.
+- Copy the step's start and end timestamps exactly so the caption follows the corresponding step.
+- Detect Arabic and Latin script to choose the annotation language, writing direction, and alignment. Use the draft language only when the title contains no detectable letters.
+- Use a readable default caption placement and styling; all generated caption fields remain editable or removable in the timeline editor.
+- Preserve manual annotations as manual. AI-generated annotations are explicitly marked as AI-origin and are valid persisted timeline content.
+- Do not modify the immutable analysis draft or the source recording. Existing timelines receive a one-time, automatic caption backfill the first time they are opened after this feature is installed. The backfill preserves existing annotations, adds captions only for steps not already covered by an annotation with the same time range, and saves a new immutable revision. A persisted generation version prevents captions from being recreated if a user later removes them.
+
+This amendment makes the tutorial-step-to-on-screen-caption conversion part of the default timeline creation workflow. Export continues to render all valid saved annotations through the existing caption renderer.
+
+
+## Amendment — Professional default subtitle styling
+
+- Automatically generated step captions use a bottom-centered placement with a safe lower margin, readable 44 px bold white text, a semi-transparent dark background, and balanced horizontal margins by default.
+- Arabic/Latin reading direction remains language-aware, while the caption block itself is centered like familiar video subtitle styles.
+- FFmpeg ASS layout must use bottom-center alignment, calculate equal left/right margins for centered captions, and provide comfortable background padding.
+- Manual caption creation uses the same professional defaults. All visual properties remain editable for users who need a custom treatment.
+- On first opening after this change, the persisted caption-style version advances. Untouched AI-generated captions from the previous default style are upgraded in a new timeline revision; captions whose formatting has been customized by the user are preserved unchanged.
