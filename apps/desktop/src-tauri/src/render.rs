@@ -1014,5 +1014,18 @@ mod tests {
         assert!(ass.contains("\\an9"));
         assert!(ass.contains("\\b1"));
         assert!(ass.contains("\\bord10"));
+
+        let mut centered = document.clone();
+        let caption = &mut centered.annotations[0];
+        caption.x = 0.5;
+        caption.y = 0.86;
+        caption.max_width = 0.84;
+        caption.font_size = 40;
+        caption.background = "#000000B3".into();
+        caption.alignment = "center".into();
+        let centered_ass = generate_ass(&centered, 1920, 1080).unwrap();
+        assert!(centered_ass.contains("\\an8\\pos(960,929)\\fs40\\b1"));
+        assert!(centered_ass.contains(",154,154,0,,"));
+        assert!(centered_ass.contains("\\bord10"));
     }
 }
