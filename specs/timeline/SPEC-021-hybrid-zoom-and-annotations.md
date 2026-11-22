@@ -81,8 +81,8 @@ This amendment makes the tutorial-step-to-on-screen-caption conversion part of t
 
 ## Amendment — Professional default subtitle styling
 
-- Automatically generated step captions use a centered lower-screen placement, readable 40 px bold white text, a semi-transparent dark background, and balanced horizontal margins by default.
+- Automatically generated step captions use a bottom-centered placement with a safe lower margin, readable 44 px bold white text, a semi-transparent dark background, and balanced horizontal margins by default.
 - Arabic/Latin reading direction remains language-aware, while the caption block itself is centered like familiar video subtitle styles.
-- FFmpeg ASS layout must calculate equal left/right margins for centered captions and provide comfortable background padding.
+- FFmpeg ASS layout must use bottom-center alignment, calculate equal left/right margins for centered captions, and provide comfortable background padding.
 - Manual caption creation uses the same professional defaults. All visual properties remain editable for users who need a custom treatment.
 - On first opening after this change, the persisted caption-style version advances. Untouched AI-generated captions from the previous default style are upgraded in a new timeline revision; captions whose formatting has been customized by the user are preserved unchanged.
