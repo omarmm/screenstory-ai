@@ -65,6 +65,20 @@ type TimelineDocument = {
   captionGenerationVersion?: number;
 };
 
+type ThemeMode = "dark" | "light";
+
+function colorWithOpacity(hex: string, opacityPercent: number): string {
+  const normalized = /^#[0-9a-f]{6}$/i.test(hex) ? hex : "#000000";
+  const alpha = Math.round(Math.min(100, Math.max(0, opacityPercent)) * 255 / 100)
+    .toString(16).padStart(2, "0").toUpperCase();
+  return normalized + alpha;
+}
+
+function colorOpacityPercent(value: string): number {
+  if (!/^#[0-9a-f]{8}$/i.test(value)) return 100;
+  return Math.round(parseInt(value.slice(7, 9), 16) / 255 * 100);
+}
+
 function formatDuration(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
   const hours = Math.floor(seconds / 3600);
@@ -120,6 +134,14 @@ export default function App() {
   const [savedTimelineSignature, setSavedTimelineSignature] = useState<string | null>(null);
   const [renderStatus, setRenderStatus] = useState<RenderStatus | null>(null);
   const [renderBusy, setRenderBusy] = useState(false);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    const saved = window.localStorage.getItem("screenstory-theme");
+    return saved === "light" ? "light" : "dark";
+  });
+  const [bulkCaptionFontSize, setBulkCaptionFontSize] = useState(44);
+  const [bulkCaptionTextColor, setBulkCaptionTextColor] = useState("#FFFFFF");
+  const [bulkCaptionBackgroundColor, setBulkCaptionBackgroundColor] = useState("#000000");
+  const [bulkCaptionBackgroundOpacity, setBulkCaptionBackgroundOpacity] = useState(70);
 
   const ffmpeg = dependencies?.dependencies.find((item) => item.id === "ffmpeg");
 
@@ -251,6 +273,11 @@ export default function App() {
     }
   }
   useEffect(() => { void bootstrap(); }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+    document.documentElement.style.colorScheme = themeMode;
+    window.localStorage.setItem("screenstory-theme", themeMode);
+  }, [themeMode]);
   useEffect(() => {
     if (!activeAnalysis?.runId || ["awaiting_cloud_consent", "completed", "failed", "cancelled"].includes(activeAnalysis.status)) return;
     const runId = activeAnalysis.runId;
@@ -590,6 +617,20 @@ export default function App() {
       ...current, annotations: current.annotations.filter((_, annotationIndex) => annotationIndex !== index),
     } : current);
   }
+  function applyStyleToAllCaptions() {
+    if (!timeline || timeline.annotations.length === 0) return;
+    const fontSize = Math.min(72, Math.max(12, Math.round(bulkCaptionFontSize)));
+    const background = colorWithOpacity(bulkCaptionBackgroundColor, bulkCaptionBackgroundOpacity);
+    setTimeline((current) => current ? {
+      ...current,
+      annotations: current.annotations.map((annotation) => ({
+        ...annotation,
+        fontSize,
+        foreground: bulkCaptionTextColor,
+        background,
+      })),
+    } : current);
+  }
   async function saveTimeline() {
     if (!timeline) return;
     setTimelineBusy(true); setError(null);
@@ -688,10 +729,19 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-theme={themeMode}>
       <header className="topbar">
         <a className="brand" href="#" aria-label="Screenstory home"><span className="brand-mark">S</span><span>screenstory</span></a>
-        <div className="topbar-right"><span className="topbar-label">LOCAL WORKSPACE</span><span className="version">{appInfo ? "v" + appInfo.version : "Starting…"}</span></div>
+        <div className="topbar-right">
+          <span className="topbar-label">LOCAL WORKSPACE</span>
+          <button
+            className="theme-toggle"
+            type="button"
+            aria-label={themeMode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            onClick={() => setThemeMode((current) => current === "dark" ? "light" : "dark")}
+          >{themeMode === "dark" ? "☀ Light mode" : "☾ Dark mode"}</button>
+          <span className="version">{appInfo ? "v" + appInfo.version : "Starting…"}</span>
+        </div>
       </header>
       <div className="workspace">
         <aside className="sidebar">
@@ -912,8 +962,38 @@ export default function App() {
                   </section>
 
                   <section className="timeline-tools-section">
-                    <div className="section-heading"><div><span className="eyebrow">ON-SCREEN TEXT</span><h3>Annotations</h3></div><button className="secondary-button compact" onClick={addTimelineAnnotation} disabled={timelineBusy}>＋ Add caption</button></div>
-                    {timeline.annotations.length === 0 && <p className="timeline-muted">No captions yet. Add Arabic, English, or mixed-language text overlays.</p>}
+                    <div className="section-heading"><div><span className="eyebrow">ON-SCREEN TEXT</span><h3>Captions</h3></div><button className="secondary-button compact" onClick={addTimelineAnnotation} disabled={timelineBusy}>＋ Add caption</button></div>
+                    {timeline.annotations.length > 0 && (
+                      <div className="caption-bulk-toolbar">
+                        <div className="caption-bulk-heading">
+                          <div><strong>Apply one style to every caption</strong><small>Set the shared size and colors. You can still customize any caption below.</small></div>
+                          <span>{timeline.annotations.length} captions</span>
+                        </div>
+                        <div className="caption-bulk-controls">
+                          <label>Text size
+                            <input aria-label="All captions font size" type="number" min={12} max={72} value={bulkCaptionFontSize}
+                              onChange={(event) => setBulkCaptionFontSize(Number(event.target.value))} />
+                          </label>
+                          <label>Text color
+                            <input aria-label="All captions text color" type="color" value={bulkCaptionTextColor}
+                              onChange={(event) => setBulkCaptionTextColor(event.target.value)} />
+                          </label>
+                          <label>Background color
+                            <input aria-label="All captions background color" type="color" value={bulkCaptionBackgroundColor}
+                              onChange={(event) => setBulkCaptionBackgroundColor(event.target.value)} />
+                          </label>
+                          <label className="caption-opacity-control">Background opacity
+                            <input aria-label="All captions background opacity" type="range" min={10} max={100} step={5}
+                              value={bulkCaptionBackgroundOpacity} onChange={(event) => setBulkCaptionBackgroundOpacity(Number(event.target.value))} />
+                            <span>{bulkCaptionBackgroundOpacity}%</span>
+                          </label>
+                          <button className="primary-button" type="button" onClick={applyStyleToAllCaptions} disabled={timelineBusy}>
+                            Apply to all captions
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {timeline.annotations.length === 0 && <p className="timeline-muted">Captions will appear here automatically when tutorial steps are created. You can also add one manually.</p>}
                     {timeline.annotations.map((annotation, index) => (
                       <article className="zoom-editor-card" key={annotation.id}>
                         <div className="timeline-step-top"><strong>Caption {index + 1}</strong><span className={"timeline-origin " + annotation.origin}>{annotation.origin === "ai" ? "AI GENERATED" : "MANUAL"}</span><button className="text-button danger-text" onClick={() => removeTimelineAnnotation(index)} disabled={timelineBusy}>Remove</button></div>
@@ -934,9 +1014,20 @@ export default function App() {
                           <label>Y<input type="number" min={0} max={1} step={0.01} value={annotation.y} onChange={(event) => updateTimelineAnnotation(index, { y: Number(event.target.value) })} /></label>
                           <label>Max width<input type="number" min={0.1} max={1} step={0.01} value={annotation.maxWidth} onChange={(event) => updateTimelineAnnotation(index, { maxWidth: Number(event.target.value) })} /></label>
                         </div>
-                        <div className="annotation-options-grid">
-                          <label>Text color<input type="text" value={annotation.foreground} onChange={(event) => updateTimelineAnnotation(index, { foreground: event.target.value })} /></label>
-                          <label>Background color<input type="text" value={annotation.background} onChange={(event) => updateTimelineAnnotation(index, { background: event.target.value })} /></label>
+                        <div className="annotation-options-grid caption-color-controls">
+                          <label>Text color
+                            <input type="color" aria-label={"Caption " + (index + 1) + " text color"} value={annotation.foreground.slice(0, 7)}
+                              onChange={(event) => updateTimelineAnnotation(index, { foreground: event.target.value })} />
+                          </label>
+                          <label>Background color
+                            <input type="color" aria-label={"Caption " + (index + 1) + " background color"} value={annotation.background.slice(0, 7)}
+                              onChange={(event) => updateTimelineAnnotation(index, { background: colorWithOpacity(event.target.value, colorOpacityPercent(annotation.background)) })} />
+                          </label>
+                          <label>Background opacity
+                            <input type="range" min={10} max={100} step={5} aria-label={"Caption " + (index + 1) + " background opacity"}
+                              value={colorOpacityPercent(annotation.background)}
+                              onChange={(event) => updateTimelineAnnotation(index, { background: colorWithOpacity(annotation.background.slice(0, 7), Number(event.target.value)) })} />
+                          </label>
                         </div>
                       </article>
                     ))}
