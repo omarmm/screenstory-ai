@@ -746,6 +746,27 @@ fn response_text(value: &Value) -> Option<String> {
     if found.is_empty() { None } else { Some(found.join("\n")) }
 }
 
+fn unknown_step_evidence_ids(draft: &AnalysisDraft, manifest: &FrameManifest) -> Vec<String> {
+    let known_frames: HashSet<&str> = manifest.frames.iter().map(|frame| frame.id.as_str()).collect();
+    let mut seen = HashSet::new();
+
+    draft.steps
+        .iter()
+        .flat_map(|step| step.evidence_frame_ids.iter())
+        .filter(|id| !known_frames.contains(id.as_str()) && seen.insert(id.as_str()))
+        .take(10)
+        .map(|id| {
+            if id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || character == '-' || character == '_'
+            }) {
+                id.chars().take(64).collect()
+            } else {
+                "<non-identifier>".to_string()
+            }
+        })
+        .collect()
+}
+
 fn validate_draft(draft: &AnalysisDraft, manifest: &FrameManifest) -> Result<(), AppError> {
     if draft.schema_version != 1 {
         return Err(AppError::new(
@@ -895,7 +916,8 @@ fn filter_invalid_zoom_suggestions(
     rejected
 }
 
-fn response_schema() -> Value {
+fn response_schema(manifest: &FrameManifest) -> Value {
+    let allowed_frame_ids = manifest.frames.iter().map(|frame| frame.id.clone()).collect::<Vec<_>>();
     json!({
         "type": "object",
         "properties": {
@@ -911,7 +933,7 @@ fn response_schema() -> Value {
                         "description":{"type":"string"},
                         "start_ms":{"type":"integer"},
                         "end_ms":{"type":"integer"},
-                        "evidence_frame_ids":{"type":"array","items":{"type":"string"}},
+                        "evidence_frame_ids":{"type":"array","minItems":1,"items":{"type":"string","enum":allowed_frame_ids.clone()}},
                         "confidence":{"type":"number"},
                         "evidence_kind":{"type":"string","enum":["observed","inference"]}
                     },
@@ -932,7 +954,7 @@ fn response_schema() -> Value {
                         "height":{"type":"number","exclusiveMinimum":0,"maximum":1,"description":"Normalized height as a fraction of the full frame; y plus height must not exceed 1."},
                         "target_scale":{"type":"number"},
                         "rationale":{"type":"string"},
-                        "evidence_frame_ids":{"type":"array","items":{"type":"string"}}
+                        "evidence_frame_ids":{"type":"array","minItems":1,"items":{"type":"string","enum":allowed_frame_ids.clone()}}
                     },
                     "required":["id","start_ms","end_ms","x","y","width","height","target_scale","rationale","evidence_frame_ids"]
                 }
@@ -1114,7 +1136,7 @@ fn gemini_request_body(manifest: &FrameManifest, run_dir: &Path, model: &str) ->
     let mut content = vec![json!({
         "type":"text",
         "text": format!(
-            "Analyze these timestamped screenshots from one desktop workflow recording. Produce a concise, evidence-grounded tutorial. Do not invent actions not visible in the frames. Distinguish observed evidence from inference. Every step and zoom suggestion must cite one or more supplied frame IDs. Zoom suggestions are optional; return an empty zoom_suggestions array when no clear zoom target is visible. For each zoom, x and y are normalized top-left coordinates relative to the entire frame, and width and height are normalized fractions of that frame (all values 0 to 1); x + width and y + height must each be at most 1. These are not pixel coordinates. Use milliseconds from the source video. Language: {}. Optional workflow context: {}. Source duration: {} ms. Source dimensions: {}x{}. Available frame IDs and timestamps: {}",
+            "Analyze these timestamped screenshots from one desktop workflow recording. Produce a concise, evidence-grounded tutorial. Do not invent actions not visible in the frames. Distinguish observed evidence from inference. Every step and zoom suggestion must cite one or more supplied frame IDs exactly as written in the available frame ID allowlist; never invent, renumber, shorten, or paraphrase a frame ID. Zoom suggestions are optional; return an empty zoom_suggestions array when no clear zoom target is visible. For each zoom, x and y are normalized top-left coordinates relative to the entire frame, and width and height are normalized fractions of that frame (all values 0 to 1); x + width and y + height must each be at most 1. These are not pixel coordinates. Use milliseconds from the source video. Language: {}. Optional workflow context: {}. Source duration: {} ms. Source dimensions: {}x{}. Available frame IDs and timestamps: {}",
             manifest.language,
             if manifest.workflow_description.trim().is_empty() { "(none)" } else { manifest.workflow_description.as_str() },
             manifest.source_duration_ms,
@@ -1145,7 +1167,7 @@ fn gemini_request_body(manifest: &FrameManifest, run_dir: &Path, model: &str) ->
         "response_format": {
             "type": "text",
             "mime_type": "application/json",
-            "schema": response_schema()
+            "schema": response_schema(manifest)
         },
         "store": false
     });
@@ -1410,11 +1432,17 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
             }
         };
         if let Err(error) = validate_draft(&draft, &manifest) {
+            let unknown_ids = unknown_step_evidence_ids(&draft, &manifest);
+            let diagnostic_reason = if unknown_ids.is_empty() {
+                error.message.clone()
+            } else {
+                format!("{} Unrecognized frame IDs: {}.", error.message, unknown_ids.join(", "))
+            };
             append_gemini_output_diagnostic(
                 &run_dir,
                 &used_model,
                 "draft_validation",
-                &error.message,
+                &diagnostic_reason,
                 interaction_id,
                 text.len(),
                 Some(draft.schema_version),
@@ -1883,11 +1911,52 @@ mod tests {
     }
 
     #[test]
-    fn response_schema_requires_evidence_for_each_step_and_zoom() {
-        let schema = response_schema();
-        let required = schema["properties"]["steps"]["items"]["required"].as_array().unwrap();
+    fn response_schema_requires_evidence_and_constrains_ids_to_the_manifest() {
+        let manifest = test_frame_manifest();
+        let schema = response_schema(&manifest);
+        let step_schema = &schema["properties"]["steps"]["items"];
+        let required = step_schema["required"].as_array().unwrap();
         assert!(required.iter().any(|value| value == "evidence_frame_ids"));
-        let zoom_required = schema["properties"]["zoom_suggestions"]["items"]["required"].as_array().unwrap();
+        assert_eq!(
+            step_schema["properties"]["evidence_frame_ids"]["items"]["enum"],
+            json!(["frame-000"])
+        );
+        assert_eq!(
+            step_schema["properties"]["evidence_frame_ids"]["minItems"],
+            json!(1)
+        );
+
+        let zoom_schema = &schema["properties"]["zoom_suggestions"]["items"];
+        let zoom_required = zoom_schema["required"].as_array().unwrap();
         assert!(zoom_required.iter().any(|value| value == "evidence_frame_ids"));
+        assert_eq!(
+            zoom_schema["properties"]["evidence_frame_ids"]["items"]["enum"],
+            json!(["frame-000"])
+        );
+    }
+
+    #[test]
+    fn unknown_step_evidence_ids_are_reported_as_bounded_identifiers() {
+        let manifest = test_frame_manifest();
+        let draft: AnalysisDraft = serde_json::from_value(json!({
+            "schema_version": 1,
+            "summary": "A tutorial summary",
+            "steps": [{
+                "id": "step-1",
+                "title": "Open settings",
+                "description": "Open settings.",
+                "start_ms": 100,
+                "end_ms": 900,
+                "evidence_frame_ids": ["frame-999", "frame-999", "not a frame ID"],
+                "confidence": 0.9,
+                "evidence_kind": "observed"
+            }],
+            "zoom_suggestions": []
+        })).unwrap();
+
+        assert_eq!(
+            unknown_step_evidence_ids(&draft, &manifest),
+            vec!["frame-999".to_string(), "<non-identifier>".to_string()]
+        );
     }
 }
