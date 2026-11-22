@@ -106,6 +106,7 @@ Domain validation rules:
 - Every timestamp must be finite, non-negative, and within the source duration; each step/suggestion must have start < end.
 - Steps must be ordered and non-overlapping unless a later approved schema explicitly permits overlap.
 - Every evidence frame ID must exist in the approved manifest.
+- The provider's structured-output schema must dynamically restrict step and zoom evidence frame IDs to the exact IDs present in the current approved manifest (string enum per array item). Rust domain validation remains authoritative and rejects any unknown evidence reference; diagnostics may include only bounded, identifier-safe unknown IDs, never generated prose or image content.
 - Confidence must be within 0–1.
 - Zoom coordinates must be normalized relative to the full source frame, width/height positive, and the rectangle must remain inside the source frame.
 - Target zoom scale must remain within the approved safe range of 1.0–3.0.
