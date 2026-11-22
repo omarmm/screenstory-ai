@@ -44,7 +44,8 @@ This milestone creates AI-generated content. It does not yet deliver the full ti
 ### 2.3 Provider and request contract
 
 - The initial provider is Gemini. Domain, extraction, validation, and timeline code depend on a provider-independent contract; Gemini request/response types remain inside the adapter.
-- Use the Gemini Interactions API for the initial integration. The default model is `gemini-4-hydrogen`, configurable through application settings rather than hard-coded in the UI.
+- Use the Gemini Interactions API for the initial integration. The default primary model is `gemini-4-hydrogen`; `gemini-3.8-flash` is the supported stable multimodal alternative. Each project stores its primary-model selection and whether automatic server-error fallback is enabled.
+- If the selected primary model exhausts retries with HTTP 5xx responses, Screenstory may automatically try the alternate approved Gemini model. Do not switch models for HTTP 429 quota/rate limits, authentication/permission failures, invalid requests, or network failures. Record each model attempt and the final model used for the analysis.
 - Use structured output with a JSON schema and validate the returned JSON again in the Rust domain layer.
 - Use inline JPEG frame data; do not use the Gemini Files API for the first slice.
 - Set `store=false` for every analysis request so the interaction is not retained as server-side conversation state. Do not use server-side previous-interaction chaining.
@@ -56,6 +57,7 @@ This milestone creates AI-generated content. It does not yet deliver the full ti
 ### 2.4 Credential storage
 
 - The Gemini API key is entered by the user in application settings and stored in the operating system credential store (Linux Secret Service/keyring).
+- The project-specific Gemini primary model and automatic-fallback preference are non-secret settings stored with the project's SQLite metadata; they must never contain credentials.
 - The key must never be stored in SQLite, project files, ordinary configuration files, logs, exports, source control, or frontend state beyond the transient entry form.
 - If no supported OS credential store is available or unlocked, explain the blocker and do not silently fall back to plaintext storage.
 - The UI may show only whether a credential is configured and a masked suffix; it must not retrieve the full key for display.
@@ -65,7 +67,7 @@ This milestone creates AI-generated content. It does not yet deliver the full ti
 
 - Extract frames locally before asking the user to approve cloud transfer.
 - Before each analysis request, show a consent review containing:
-  - Provider and model.
+  - Provider, primary model, and the alternate model that may receive the same approved sample if automatic fallback is enabled.
   - Source project and recording filename/duration.
   - Number of frames and estimated payload size.
   - Optional workflow description and output language.
@@ -162,6 +164,7 @@ Domain validation rules:
 - Local Ollama analysis.
 - Timeline editor, manual step editing, zoom editing, annotations, preview, and final MP4 rendering/export.
 - Audio transcription, speech recognition, and voice-over.
+- OpenCode Free model integration: OpenCode's documented free Console inference models are restricted to OpenCode itself; external clients are rejected with HTTP 403. Screenstory will not bypass this restriction. A separately authorized provider integration may be considered later.
 - Cross-platform provider support beyond the Linux-first architecture.
 
 ## 7. Upstream API reference snapshot

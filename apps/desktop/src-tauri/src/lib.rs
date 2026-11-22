@@ -1491,6 +1491,8 @@ pub fn run() {
             start_recording,
             stop_recording,
             analysis::get_gemini_key_status,
+            analysis::get_gemini_model_settings,
+            analysis::save_gemini_model_settings,
             analysis::save_gemini_api_key,
             analysis::delete_gemini_api_key,
             analysis::start_analysis,

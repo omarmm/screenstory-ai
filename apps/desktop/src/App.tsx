@@ -24,10 +24,16 @@ type RenderStatus = {
   durationSeconds: number; errorCode: string | null; rendererVersion: string;
   hasAudio: boolean; annotationCount: number; activeZoomCount: number;
 };
+type GeminiModelSettings = { primaryModel: string; fallbackModel: string | null; automaticFallback: boolean };
+type AnalysisStarted = {
+  runId: string; recordingId: string; fileName: string; model: string;
+  primaryModel: string; fallbackModel: string | null; automaticFallback: boolean;
+};
 type AnalysisStatus = {
   runId: string; recordingId: string; sourceFileName: string; status: string;
   completedFrames: number; totalFrames: number; totalBytes: number;
   durationSeconds: number | null; provider: string; model: string;
+  primaryModel: string; fallbackModel: string | null; automaticFallback: boolean;
   errorCode: string | null; workflowDescription: string; language: string;
 };
 type AnalysisDraft = {
@@ -96,6 +102,12 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [geminiKeyConfigured, setGeminiKeyConfigured] = useState(false);
   const [geminiKeyInput, setGeminiKeyInput] = useState("");
+  const [geminiModelSettings, setGeminiModelSettings] = useState<GeminiModelSettings>({
+    primaryModel: "gemini-4-hydrogen",
+    fallbackModel: "gemini-3.8-flash",
+    automaticFallback: true,
+  });
+  const [geminiSettingsBusy, setGeminiSettingsBusy] = useState(false);
   const [workflowDescription, setWorkflowDescription] = useState("");
   const [analysisLanguage, setAnalysisLanguage] = useState<"auto" | "en" | "ar">("auto");
   const [activeAnalysis, setActiveAnalysis] = useState<AnalysisStatus | null>(null);
@@ -189,6 +201,16 @@ export default function App() {
     setProjects(allProjects);
     setActiveProject(current);
     setRecordings(current ? await invoke<Recording[]>("list_recordings") : []);
+    if (current) {
+      const modelSettings = await invoke<GeminiModelSettings>("get_gemini_model_settings");
+      setGeminiModelSettings(modelSettings);
+    } else {
+      setGeminiModelSettings({
+        primaryModel: "gemini-4-hydrogen",
+        fallbackModel: "gemini-3.8-flash",
+        automaticFallback: true,
+      });
+    }
   }
   async function refreshCaptureSources() {
     const sources = await invoke<CaptureSource[]>("list_capture_sources");
@@ -344,6 +366,22 @@ export default function App() {
     } catch (reason) { setError(friendlyError(reason)); }
     finally { setBusy(false); }
   }
+  async function saveGeminiModelSettings(primaryModel: string, automaticFallback: boolean) {
+    setGeminiSettingsBusy(true);
+    setError(null);
+    try {
+      const saved = await invoke<GeminiModelSettings>("save_gemini_model_settings", { primaryModel, automaticFallback });
+      setGeminiModelSettings(saved);
+      setNotice("Gemini model settings saved for this project.");
+    } catch (reason) {
+      setError(friendlyError(reason));
+      const persisted = await invoke<GeminiModelSettings>("get_gemini_model_settings").catch(() => null);
+      if (persisted) setGeminiModelSettings(persisted);
+    } finally {
+      setGeminiSettingsBusy(false);
+    }
+  }
+
   async function saveGeminiKey() {
     setAnalysisBusy(true); setError(null);
     try {
@@ -368,7 +406,7 @@ export default function App() {
     setAnalysisBusy(true); setError(null); setNotice(null); setAnalysisDraft(null);
     try {
       if (!await ensureRuntimeDependency("ffmpeg")) return;
-      const started = await invoke<{ runId: string; recordingId: string; fileName: string }>("start_analysis", {
+      const started = await invoke<AnalysisStarted>("start_analysis", {
         recordingId: recording.id,
         workflowDescription,
         language: analysisLanguage,
@@ -376,7 +414,9 @@ export default function App() {
       setActiveAnalysis({
         runId: started.runId, recordingId: started.recordingId, sourceFileName: started.fileName,
         status: "extracting_frames", completedFrames: 0, totalFrames: 0, totalBytes: 0,
-        durationSeconds: null, provider: "gemini", model: "gemini-4-hydrogen",
+        durationSeconds: null, provider: "gemini", model: started.model,
+        primaryModel: started.primaryModel, fallbackModel: started.fallbackModel,
+        automaticFallback: started.automaticFallback,
         errorCode: null, workflowDescription, language: analysisLanguage,
       });
     } catch (reason) { setError(friendlyError(reason)); }
@@ -386,7 +426,11 @@ export default function App() {
     if (!activeAnalysis || activeAnalysis.status !== "awaiting_cloud_consent") return;
     const megabytes = (activeAnalysis.totalBytes / (1024 * 1024)).toFixed(2);
     const approved = window.confirm(
-      "Send " + activeAnalysis.completedFrames + " sampled JPEG frames (" + megabytes + " MiB) and the optional workflow description to Google Gemini (" + activeAnalysis.model + ")?\n\nThe original MP4 will NOT be uploaded. The sampled frames may still contain private information; automatic redaction is not guaranteed. Only continue if you approve this transfer."
+      "Send " + activeAnalysis.completedFrames + " sampled JPEG frames (" + megabytes + " MiB) and the optional workflow description to Google Gemini?\n\nPrimary model: " + activeAnalysis.primaryModel +
+      (activeAnalysis.automaticFallback && activeAnalysis.fallbackModel
+        ? "\nAutomatic server-error fallback: " + activeAnalysis.fallbackModel
+        : "\nAutomatic model fallback: disabled") +
+      "\n\nIf the primary model remains unavailable after retries, the same approved sampled frames may also be sent to the fallback model. The original MP4 will NOT be uploaded. Sampled frames may contain private information; automatic redaction is not guaranteed. Continue only if you approve this transfer to Google Gemini."
     );
     if (!approved) return;
     setAnalysisBusy(true); setError(null);
@@ -728,6 +772,34 @@ export default function App() {
                     <button className="text-button" onClick={() => void deleteGeminiKey()} disabled={analysisBusy}>Remove API key</button>
                   </div>
                 )}
+                <div className="gemini-model-settings">
+                  <label className="field-label" htmlFor="gemini-primary-model">Primary Gemini model</label>
+                  <select
+                    id="gemini-primary-model"
+                    aria-label="Primary Gemini model"
+                    value={geminiModelSettings.primaryModel}
+                    disabled={geminiSettingsBusy || analysisBusy}
+                    onChange={(event) => void saveGeminiModelSettings(event.target.value, geminiModelSettings.automaticFallback)}
+                  >
+                    <option value="gemini-4-hydrogen">Gemini 4 Hydrogen</option>
+                    <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+                  </select>
+                  <label className="gemini-fallback-toggle">
+                    <input
+                      type="checkbox"
+                      checked={geminiModelSettings.automaticFallback}
+                      disabled={geminiSettingsBusy || analysisBusy}
+                      onChange={(event) => void saveGeminiModelSettings(geminiModelSettings.primaryModel, event.target.checked)}
+                    />
+                    Automatically switch models after server errors
+                  </label>
+                  <small>
+                    {geminiModelSettings.automaticFallback && geminiModelSettings.fallbackModel
+                      ? "Fallback: " + geminiModelSettings.fallbackModel + ". It runs only after the primary model exhausts retries with HTTP 5xx errors. HTTP 429, network, authentication, and invalid-request errors do not trigger fallback."
+                      : "Automatic fallback is disabled. Analysis uses only the selected primary model."}
+                    {" "}Settings are saved with this project.
+                  </small>
+                </div>
                 <label className="field-label" htmlFor="workflow-description">Optional workflow context</label>
                 <textarea id="workflow-description" value={workflowDescription} maxLength={2000} onChange={(event) => setWorkflowDescription(event.target.value)} placeholder="Describe what this workflow is meant to accomplish. This is context for Gemini, not proof of what happened." />
                 <div className="language-row"><label className="field-label" htmlFor="analysis-language">Tutorial language</label>
@@ -747,12 +819,16 @@ export default function App() {
                   </>}
                   {activeAnalysis.status === "awaiting_cloud_consent" && <>
                     <p>Local frame preparation is complete. No data has been sent yet.</p>
-                    <div className="consent-details"><strong>Transfer review</strong><span>Provider: Google Gemini · {activeAnalysis.model}</span><span>Recording: {activeAnalysis.sourceFileName} · {formatDuration(activeAnalysis.durationSeconds ?? 0)}</span><span>Sampled frames: {activeAnalysis.completedFrames} · {(activeAnalysis.totalBytes / (1024 * 1024)).toFixed(2)} MiB</span><span>Workflow text: {activeAnalysis.workflowDescription.trim() ? "Included" : "None"}</span><b>Only sampled frames and the optional text are sent. The original MP4 is not uploaded.</b><small>Frames can still contain private information. Automatic redaction is not guaranteed.</small></div>
+                    <div className="consent-details"><strong>Transfer review</strong><span>Provider: Google Gemini</span><span>Primary model: {activeAnalysis.primaryModel}</span><span>Fallback model: {activeAnalysis.automaticFallback ? activeAnalysis.fallbackModel : "Disabled"}</span><span>Recording: {activeAnalysis.sourceFileName} · {formatDuration(activeAnalysis.durationSeconds ?? 0)}</span><span>Sampled frames: {activeAnalysis.completedFrames} · {(activeAnalysis.totalBytes / (1024 * 1024)).toFixed(2)} MiB</span><span>Workflow text: {activeAnalysis.workflowDescription.trim() ? "Included" : "None"}</span><b>Only sampled frames and the optional text are sent. The original MP4 is not uploaded.</b><small>Frames can still contain private information. Automatic redaction is not guaranteed.</small></div>
                     <div className="analysis-actions"><button className="primary-button" onClick={() => void sendAnalysisToGemini()} disabled={!geminiKeyConfigured || analysisBusy}>Approve & send frames to Gemini</button><button className="secondary-button" onClick={() => void cancelAnalysis()}>Cancel run</button></div>
                     {!geminiKeyConfigured && <small>Save a Gemini API key above before approving the transfer.</small>}
                   </>}
                   {activeAnalysis.status === "sending_to_provider" && <>
-                    <p>Gemini is reviewing the approved sample frames and preparing evidence-linked tutorial steps.</p>
+                    <p>
+                      {activeAnalysis.model !== activeAnalysis.primaryModel
+                        ? "The primary model was unavailable. Screenstory is trying the fallback model " + activeAnalysis.model + "."
+                        : "Gemini is reviewing the approved sample frames and preparing evidence-linked tutorial steps."}
+                    </p>
                     <div className="progress-track"><span className="indeterminate" /></div>
                     <button className="secondary-button" onClick={() => void cancelAnalysis()}>Cancel analysis</button>
                   </>}
@@ -766,6 +842,7 @@ export default function App() {
                     Analysis failed ({activeAnalysis.errorCode ?? "unknown error"}). Your original recording is unchanged. You can start another run.
                     {activeAnalysis.errorCode === "GEMINI_SERVER_ERROR" && <p>Google Gemini is temporarily unavailable. Screenstory followed Google's Retry-After instruction, but Gemini remained unavailable after automatic retries. Your original recording is unchanged. Please try again later.</p>}
                     {activeAnalysis.errorCode === "GEMINI_RETRY_DEFERRED" && <p>Google requested a retry delay longer than Screenstory's 60-second automatic retry window, or sent a delay value Screenstory could not safely interpret. Screenstory stopped instead of retrying early. Please try again later.</p>}
+                    {activeAnalysis.errorCode === "GEMINI_MODELS_UNAVAILABLE" && <p>Both the primary Gemini model and its approved fallback returned server errors after retries. The sampled frames remain in this project. Please try again later or choose another primary model.</p>}
                     {["GEMINI_SERVER_ERROR", "GEMINI_RETRY_DEFERRED"].includes(activeAnalysis.errorCode ?? "") && activeProject && <p>Provider response details (with the API key redacted) are saved locally at <code>~/Videos/Screenstory/Projects/{activeProject.id}/analysis/{activeAnalysis.runId}/provider-errors.jsonl</code>. Share that file for diagnosis; never share your API key.</p>}
                   </div>}
                   {activeAnalysis.status === "cancelled" && <p>Analysis cancelled. Your original recording is unchanged.</p>}

@@ -57,7 +57,9 @@ Verification:
 - Model ID remains a default Rust constant, not user-selectable yet.
 - Analysis-run history recovery after app restart, immediate cancellation of a blocking provider request, and rich usage/cost reporting remain outstanding.
 - Target-device Gemini analysis on 0.5.3 returned HTTP 503 (`service_unavailable`) on all three attempts, each with `Retry-After: 30`; no successful Gemini analysis has been verified.
-- The previous retry helper capped provider-requested delays at 15 seconds. The follow-up patch waits the full numeric `Retry-After` value up to 60 seconds, defers instead of retrying early for longer or unparseable values, and checks cancellation during the wait. Local verification of this patch is pending.
+- The previous retry helper capped provider-requested delays at 15 seconds. The corrected helper waits the full numeric `Retry-After` value up to 60 seconds, defers instead of retrying early for longer or unparseable values, and checks cancellation during the wait.
+- Target-device verification after rebuilding from commit `2a0aef3` measured 31.334 and 31.642 seconds between attempts when Google returned `Retry-After: 30`; retry timing is verified, although Gemini still returned HTTP 503.
+- Source now includes project-specific Gemini model selection and automatic fallback from `gemini-4-hydrogen` to `gemini-3.8-flash` after exhausted HTTP 5xx retries. It does not fail over on quota/rate-limit, authentication, invalid-request, or network errors. The model-selection/fallback change is not yet locally tested or packaged.
 
 ## M4 — Versioned timeline and step editing
 
@@ -132,7 +134,7 @@ Partially implemented on `prototype/tauri-foundation` (release source version 0.
 - No shell interpolation, arbitrary package names, PPAs, repositories, or signing keys are added.
 
 Not yet verified:
-- The latest Gemini retry-policy patch has not yet passed local Rust tests, formatting, Clippy, or a fresh Debian build. GitHub Actions was intentionally not run.
+- The latest Gemini model-selection/fallback source and frontend wiring have not yet passed local Rust tests, frontend tests, formatting, Clippy, or a fresh Debian build. GitHub Actions was intentionally not run.
 - The installer has not yet been exercised on Linux Mint 22.3, including PolicyKit approval/cancellation, a package-manager lock, network failure, and partial install recovery.
 - FFmpeg/libass/encoder/font capability probes and Arabic caption blocking need target-device verification.
 - A 0.5.3 Debian package (6.07 MiB) was built locally, installed, and launched on the target device. It is not a release artifact; the retry-policy patch requires a fresh local build and device verification.

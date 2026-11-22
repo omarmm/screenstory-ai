@@ -40,6 +40,8 @@ function standard(command: string) {
   switch (command) {
     case "get_app_info": return Promise.resolve(appInfo);
     case "get_gemini_key_status": return Promise.resolve({ configured: false });
+    case "get_gemini_model_settings": return Promise.resolve({ primaryModel: "gemini-4-hydrogen", fallbackModel: "gemini-3.8-flash", automaticFallback: true });
+    case "save_gemini_model_settings": return Promise.resolve({ primaryModel: "gemini-4-hydrogen", fallbackModel: "gemini-3.8-flash", automaticFallback: true });
     case "check_dependencies": return Promise.resolve(report);
     case "get_recording_status": return Promise.resolve({ isRecording: false, fileName: null, startedAtMs: null, warning: null });
     case "list_capture_sources": return Promise.resolve([captureSource]);
@@ -87,7 +89,7 @@ describe("Screenstory desktop application", () => {
       return standard(command);
     });
     render(<App />);
-    expect(await screen.findByText("Demo project")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Demo project" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Install automatically" })).toBeNull();
     expect(invoke).not.toHaveBeenCalledWith("install_dependency", { dependencyId: "ffmpeg" });
 
@@ -97,6 +99,39 @@ describe("Screenstory desktop application", () => {
     expect(confirm).toHaveBeenCalled();
     expect(await screen.findByRole("button", { name: /Stop & save/ })).toBeTruthy();
     confirm.mockRestore();
+  });
+
+  it("saves a primary Gemini model and its automatic fallback preference", async () => {
+    invoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === "list_projects") return Promise.resolve([project]);
+      if (command === "get_active_project") return Promise.resolve(project);
+      if (command === "get_gemini_model_settings") {
+        return Promise.resolve({ primaryModel: "gemini-4-hydrogen", fallbackModel: "gemini-3.8-flash", automaticFallback: true });
+      }
+      if (command === "save_gemini_model_settings") {
+        const selected = args as { primaryModel: string; automaticFallback: boolean };
+        const alternate = selected.primaryModel === "gemini-4-hydrogen" ? "gemini-3.8-flash" : "gemini-4-hydrogen";
+        return Promise.resolve({
+          primaryModel: selected.primaryModel,
+          fallbackModel: selected.automaticFallback ? alternate : null,
+          automaticFallback: selected.automaticFallback,
+        });
+      }
+      return standard(command);
+    });
+    render(<App />);
+    const modelSelect = await screen.findByRole("combobox", { name: "Primary Gemini model" });
+    fireEvent.change(modelSelect, { target: { value: "gemini-3.8-flash" } });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_gemini_model_settings", {
+      primaryModel: "gemini-3.8-flash",
+      automaticFallback: true,
+    }));
+    await waitFor(() => expect((modelSelect as HTMLSelectElement).value).toBe("gemini-3.8-flash"));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Automatically switch models after server errors" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("save_gemini_model_settings", {
+      primaryModel: "gemini-3.8-flash",
+      automaticFallback: false,
+    }));
   });
 
   it("loads the local workspace and offers project creation", async () => {
