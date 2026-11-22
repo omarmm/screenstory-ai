@@ -1024,7 +1024,7 @@ fn append_gemini_output_diagnostic(
     let path = run_dir.join("provider-errors.jsonl");
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
         if let Ok(mut line) = serde_json::to_vec(&diagnostic) {
-            line.push(b'\\n');
+            line.push(b'\n');
             let _ = file.write_all(&line);
         }
     }
