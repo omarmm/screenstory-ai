@@ -36,6 +36,8 @@ pub struct TimelineDocument {
     pub zoom_segments: Vec<TimelineZoomSegment>,
     #[serde(default)]
     pub annotations: Vec<TimelineAnnotation>,
+    #[serde(default)]
+    pub caption_generation_version: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -533,6 +535,26 @@ fn annotations_from_steps(
         .collect()
 }
 
+fn ensure_automatic_captions(timeline: &mut TimelineDocument) -> bool {
+    if timeline.caption_generation_version >= 1 {
+        return false;
+    }
+
+    let generated = annotations_from_steps(&timeline.steps, &timeline.language);
+    for annotation in generated {
+        let already_covered = timeline.annotations.iter().any(|existing| {
+            existing.id == annotation.id
+                || (existing.start_ms == annotation.start_ms
+                    && existing.end_ms == annotation.end_ms)
+        });
+        if !already_covered {
+            timeline.annotations.push(annotation);
+        }
+    }
+    timeline.caption_generation_version = 1;
+    true
+}
+
 #[tauri::command]
 pub fn create_timeline_from_draft(
     run_id: String,
@@ -631,6 +653,7 @@ pub fn create_timeline_from_draft(
             transition_duration_ms: 250,
         }).collect(),
         annotations,
+        caption_generation_version: 1,
     };
     validate_timeline(&timeline, &manifest)?;
     let relative_snapshot = format!("{}/revision-1.json", timeline_id);
@@ -698,8 +721,12 @@ pub fn get_timeline_for_recording(
     let migrated = migrate_v1_timeline(&mut value)?;
     let mut timeline: TimelineDocument = serde_json::from_value(value)
         .map_err(|_| AppError::new("TIMELINE_SNAPSHOT_INVALID", "The current timeline snapshot is invalid."))?;
+    let mut updated = migrated;
+    if ensure_automatic_captions(&mut timeline) {
+        updated = true;
+    }
     let (_, manifest) = source_manifest(&project_dir, &run_id)?;
-    if migrated {
+    if updated {
         timeline.revision = revision as u64 + 1;
         timeline.updated_at_ms = now_ms();
         let next_name = format!("revision-{}.json", timeline.revision);
@@ -720,7 +747,7 @@ pub fn get_timeline_for_recording(
         }
     }
     validate_timeline(&timeline, &manifest)?;
-    if timeline.timeline_id != timeline_id || timeline.revision != (revision as u64 + u64::from(migrated)) || timeline.recording_id != recording_id {
+    if timeline.timeline_id != timeline_id || timeline.revision != (revision as u64 + u64::from(updated)) || timeline.recording_id != recording_id {
         return Err(AppError::new("TIMELINE_INDEX_MISMATCH", "The current timeline snapshot does not match the project index."));
     }
     Ok(Some(timeline))
@@ -853,6 +880,7 @@ mod tests {
             }],
             zoom_segments: vec![],
             annotations: vec![],
+            caption_generation_version: 1,
         }
     }
 
@@ -894,6 +922,39 @@ mod tests {
             },
             &example_manifest(),
         ).is_ok());
+    }
+
+    #[test]
+    fn existing_timelines_receive_captions_once_without_overwriting_manual_captions() {
+        let mut timeline = example_timeline();
+        timeline.caption_generation_version = 0;
+        timeline.annotations.push(TimelineAnnotation {
+            id: "manual-caption".to_string(),
+            text: "My own caption".to_string(),
+            language: "en".to_string(),
+            start_ms: 2000,
+            end_ms: 3000,
+            x: 0.08,
+            y: 0.08,
+            max_width: 0.84,
+            font_size: 24,
+            foreground: "#FFFFFF".to_string(),
+            background: "#000000CC".to_string(),
+            alignment: "left".to_string(),
+            direction: "ltr".to_string(),
+            origin: "manual".to_string(),
+        });
+
+        assert!(ensure_automatic_captions(&mut timeline));
+        assert_eq!(timeline.caption_generation_version, 1);
+        assert_eq!(timeline.annotations.len(), 2);
+        assert_eq!(timeline.annotations[0].id, "manual-caption");
+        assert_eq!(timeline.annotations[1].text, "Open settings");
+        assert_eq!(timeline.annotations[1].origin, "ai");
+
+        timeline.annotations.clear();
+        assert!(!ensure_automatic_captions(&mut timeline));
+        assert!(timeline.annotations.is_empty());
     }
 
     #[test]
