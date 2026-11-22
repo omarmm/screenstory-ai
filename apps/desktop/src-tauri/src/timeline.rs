@@ -510,7 +510,7 @@ fn annotations_from_steps(
                 "ltr"
             };
             let (x, alignment) = if direction == "rtl" {
-                (0.92, "right")
+                (0.08, "right")
             } else {
                 (0.08, "left")
             };
