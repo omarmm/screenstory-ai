@@ -913,7 +913,9 @@ mod tests {
         let mut timeline = example_timeline();
         timeline.steps[0].evidence_frame_ids = vec!["not-a-real-frame".to_string()];
         assert_eq!(
-            validate_timeline(&timeline, &example_manifest()).unwrap_err().code,
+            validate_timeline(&timeline, &example_manifest())
+                .unwrap_err()
+                .code,
             "TIMELINE_EVIDENCE_INVALID"
         );
     }

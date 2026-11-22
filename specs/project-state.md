@@ -3,7 +3,7 @@
 **Project:** Screenstory  
 **Baseline:** MVP v1.0  
 **Current milestone:** M8 — user-consented runtime dependency installation and release hardening  
-**Status:** The latest packaged version verified on the target device is 0.5.2. Source on `prototype/tauri-foundation` is version 0.5.3 and includes the later workspace, Gemini diagnostics, sampling, and partial SPEC-024 runtime-dependency work. SPEC-024 implementation is not yet verified: no tests, formatting, Clippy, local build, or CI run has been performed for the latest commits. The latest source is not a release artifact. Target-device smoke tests and a real Gemini request remain pending. This is not a completed MVP release.
+**Status:** The target Linux Mint device has installed and opened a locally built 0.5.3 Debian package (6.07 MiB). Clippy and local Debian packaging succeeded for the pre-patch 0.5.3 source. A formatting diff in `timeline.rs` was reported by `cargo fmt --check`; its correction is included in the current source patch. The latest Gemini retry-policy correction awaits local Rust tests, formatting, Clippy, a fresh package build, and target-device retesting. SPEC-024 remains partially implemented and its runtime dependency installer has not been exercised end to end. This branch is development source, not a verified release.
 
 ## Product scope
 
@@ -56,7 +56,8 @@ Verification:
 - The response parser fix was included in run `44943033679`, which passed frontend checks, Rust tests, Clippy, Debian build, metadata verification and artifact upload.
 - Model ID remains a default Rust constant, not user-selectable yet.
 - Analysis-run history recovery after app restart, immediate cancellation of a blocking provider request, and rich usage/cost reporting remain outstanding.
-- A real Gemini request using a user-owned API key and real source recording has not been verified on the target device.
+- Target-device Gemini analysis on 0.5.3 returned HTTP 503 (`service_unavailable`) on all three attempts, each with `Retry-After: 30`; no successful Gemini analysis has been verified.
+- The previous retry helper capped provider-requested delays at 15 seconds. The follow-up patch waits the full numeric `Retry-After` value up to 60 seconds, defers instead of retrying early for longer or unparseable values, and checks cancellation during the wait. Local verification of this patch is pending.
 
 ## M4 — Versioned timeline and step editing
 
@@ -131,10 +132,10 @@ Partially implemented on `prototype/tauri-foundation` (release source version 0.
 - No shell interpolation, arbitrary package names, PPAs, repositories, or signing keys are added.
 
 Not yet verified:
-- No Rust/TypeScript tests, formatter, Clippy, local build, or GitHub Actions run has been executed for these commits.
+- The latest Gemini retry-policy patch has not yet passed local Rust tests, formatting, Clippy, or a fresh Debian build. GitHub Actions was intentionally not run.
 - The installer has not yet been exercised on Linux Mint 22.3, including PolicyKit approval/cancellation, a package-manager lock, network failure, and partial install recovery.
 - FFmpeg/libass/encoder/font capability probes and Arabic caption blocking need target-device verification.
-- The 0.5.3 Debian package has not been built or released.
+- A 0.5.3 Debian package (6.07 MiB) was built locally, installed, and launched on the target device. It is not a release artifact; the retry-policy patch requires a fresh local build and device verification.
 
 Do not mark SPEC-024 complete until the full acceptance criteria pass on supported Linux Mint versions. All implementation commits for this work include `[skip ci]`; no GitHub Actions build minutes have been used.
 

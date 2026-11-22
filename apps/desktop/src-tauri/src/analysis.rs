@@ -26,6 +26,7 @@ const MAX_FRAMES: usize = 30;
 const MAX_SUPPORTED_FRAMES: usize = 60;
 const MAX_INLINE_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 const MAX_EDGE: u32 = 1024;
+const MAX_GEMINI_RETRY_AFTER_SECONDS: u64 = 60;
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -660,11 +661,64 @@ fn response_schema() -> Value {
     })
 }
 
-fn gemini_retry_delay(attempt: usize, retry_after: Option<&str>) -> Duration {
-    if let Some(seconds) = retry_after.and_then(|value| value.trim().parse::<u64>().ok()) {
-        return Duration::from_secs(seconds.clamp(1, 15));
+#[derive(Debug, PartialEq, Eq)]
+enum GeminiRetryDecision {
+    Wait(Duration),
+    Defer,
+}
+
+fn gemini_retry_decision(attempt: usize, retry_after: Option<&str>) -> GeminiRetryDecision {
+    if let Some(value) = retry_after {
+        let Ok(seconds) = value.trim().parse::<u128>() else {
+            // Do not ignore a provider-supplied delay that cannot be interpreted safely.
+            return GeminiRetryDecision::Defer;
+        };
+        if seconds > MAX_GEMINI_RETRY_AFTER_SECONDS as u128 {
+            // Defer instead of retrying before Google's requested delay has elapsed.
+            return GeminiRetryDecision::Defer;
+        }
+        return GeminiRetryDecision::Wait(Duration::from_secs((seconds as u64).max(1)));
     }
-    Duration::from_secs(1_u64 << attempt.min(3))
+
+    GeminiRetryDecision::Wait(Duration::from_secs(1_u64 << attempt.min(3)))
+}
+
+fn wait_for_gemini_retry(
+    attempt: usize,
+    retry_after: Option<&str>,
+    cancellation: &AtomicBool,
+) -> Result<(), AppError> {
+    let delay = match gemini_retry_decision(attempt, retry_after) {
+        GeminiRetryDecision::Wait(delay) => delay,
+        GeminiRetryDecision::Defer => {
+            return Err(AppError::new(
+                "GEMINI_RETRY_DEFERRED",
+                "Google requested a retry delay longer than Screenstory's 60-second automatic retry window, or returned a Retry-After value that could not be interpreted safely. Screenstory stopped instead of retrying early. Please try again later.",
+            ));
+        }
+    };
+
+    let mut remaining = delay;
+    while !remaining.is_zero() {
+        if cancellation.load(Ordering::SeqCst) {
+            return Err(AppError::new(
+                "ANALYSIS_CANCELLED",
+                "Analysis was cancelled while waiting to retry Gemini.",
+            ));
+        }
+        let interval = remaining.min(Duration::from_millis(100));
+        thread::sleep(interval);
+        remaining = remaining.saturating_sub(interval);
+    }
+
+    if cancellation.load(Ordering::SeqCst) {
+        return Err(AppError::new(
+            "ANALYSIS_CANCELLED",
+            "Analysis was cancelled while waiting to retry Gemini.",
+        ));
+    }
+
+    Ok(())
 }
 
 fn redact_provider_error_body(body: &str, api_key: &str) -> String {
@@ -833,13 +887,13 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
                     } else if status == 429 {
                         last_error_code = "GEMINI_RATE_LIMITED";
                         if attempt < 2 {
-                            thread::sleep(gemini_retry_delay(attempt, retry_after.as_deref()));
+                            wait_for_gemini_retry(attempt, retry_after.as_deref(), cancellation.as_ref())?;
                             continue;
                         }
                     } else if status >= 500 {
                         last_error_code = "GEMINI_SERVER_ERROR";
                         if attempt < 2 {
-                            thread::sleep(gemini_retry_delay(attempt, retry_after.as_deref()));
+                            wait_for_gemini_retry(attempt, retry_after.as_deref(), cancellation.as_ref())?;
                             continue;
                         }
                     } else {
@@ -976,13 +1030,30 @@ mod tests {
     }
 
     #[test]
-    fn gemini_retry_delay_uses_bounded_backoff_and_retry_after() {
-        assert_eq!(gemini_retry_delay(0, None), Duration::from_secs(1));
-        assert_eq!(gemini_retry_delay(1, None), Duration::from_secs(2));
-        assert_eq!(gemini_retry_delay(2, None), Duration::from_secs(4));
-        assert_eq!(gemini_retry_delay(0, Some("7")), Duration::from_secs(7));
-        assert_eq!(gemini_retry_delay(0, Some("999")), Duration::from_secs(15));
-        assert_eq!(gemini_retry_delay(0, Some("not-a-number")), Duration::from_secs(1));
+    fn gemini_retry_decision_respects_provider_retry_after_without_retrying_early() {
+        assert_eq!(gemini_retry_decision(0, None), GeminiRetryDecision::Wait(Duration::from_secs(1)));
+        assert_eq!(gemini_retry_decision(1, None), GeminiRetryDecision::Wait(Duration::from_secs(2)));
+        assert_eq!(gemini_retry_decision(2, None), GeminiRetryDecision::Wait(Duration::from_secs(4)));
+        assert_eq!(gemini_retry_decision(0, Some("7")), GeminiRetryDecision::Wait(Duration::from_secs(7)));
+        assert_eq!(gemini_retry_decision(0, Some("30")), GeminiRetryDecision::Wait(Duration::from_secs(30)));
+        assert_eq!(gemini_retry_decision(0, Some("60")), GeminiRetryDecision::Wait(Duration::from_secs(60)));
+        assert_eq!(gemini_retry_decision(0, Some("61")), GeminiRetryDecision::Defer);
+        assert_eq!(gemini_retry_decision(0, Some("999")), GeminiRetryDecision::Defer);
+        assert_eq!(gemini_retry_decision(0, Some("not-a-number")), GeminiRetryDecision::Defer);
+    }
+
+    #[test]
+    fn gemini_retry_wait_stops_when_analysis_is_cancelled() {
+        let cancellation = AtomicBool::new(true);
+        let error = wait_for_gemini_retry(0, Some("30"), &cancellation).unwrap_err();
+        assert_eq!(error.code, "ANALYSIS_CANCELLED");
+    }
+
+    #[test]
+    fn gemini_retry_wait_defers_when_provider_delay_exceeds_safe_window() {
+        let cancellation = AtomicBool::new(false);
+        let error = wait_for_gemini_retry(0, Some("61"), &cancellation).unwrap_err();
+        assert_eq!(error.code, "GEMINI_RETRY_DEFERRED");
     }
 
     #[test]

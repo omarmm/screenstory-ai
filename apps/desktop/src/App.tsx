@@ -764,7 +764,9 @@ export default function App() {
                   </>}
                   {activeAnalysis.status === "failed" && <div className="inline-warning">
                     Analysis failed ({activeAnalysis.errorCode ?? "unknown error"}). Your original recording is unchanged. You can start another run.
-                    {activeAnalysis.errorCode === "GEMINI_SERVER_ERROR" && activeProject && <p>Google returned a server-side error after automatic retries. Diagnostic response details (with the API key redacted) are saved locally at <code>~/Videos/Screenstory/Projects/{activeProject.id}/analysis/{activeAnalysis.runId}/provider-errors.jsonl</code>. Share that file for diagnosis; never share your API key.</p>}
+                    {activeAnalysis.errorCode === "GEMINI_SERVER_ERROR" && <p>Google Gemini is temporarily unavailable. Screenstory followed Google's Retry-After instruction, but Gemini remained unavailable after automatic retries. Your original recording is unchanged. Please try again later.</p>}
+                    {activeAnalysis.errorCode === "GEMINI_RETRY_DEFERRED" && <p>Google requested a retry delay longer than Screenstory's 60-second automatic retry window, or sent a delay value Screenstory could not safely interpret. Screenstory stopped instead of retrying early. Please try again later.</p>}
+                    {["GEMINI_SERVER_ERROR", "GEMINI_RETRY_DEFERRED"].includes(activeAnalysis.errorCode ?? "") && activeProject && <p>Provider response details (with the API key redacted) are saved locally at <code>~/Videos/Screenstory/Projects/{activeProject.id}/analysis/{activeAnalysis.runId}/provider-errors.jsonl</code>. Share that file for diagnosis; never share your API key.</p>}
                   </div>}
                   {activeAnalysis.status === "cancelled" && <p>Analysis cancelled. Your original recording is unchanged.</p>}
                 </section>
