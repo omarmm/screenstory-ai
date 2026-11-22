@@ -807,6 +807,7 @@ pub fn save_timeline(
         AppError::new("TIMELINE_NOT_FOUND", "The previous timeline revision could not be read.")
     })?).map_err(|_| AppError::new("TIMELINE_SNAPSHOT_INVALID", "The previous timeline revision is invalid."))?;
     timeline.created_at_ms = previous.created_at_ms;
+    timeline.caption_generation_version = previous.caption_generation_version;
     timeline.updated_at_ms = now_ms();
     timeline.revision = expected_revision + 1;
     validate_timeline(&timeline, &manifest)?;
