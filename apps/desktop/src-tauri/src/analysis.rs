@@ -121,6 +121,8 @@ pub struct AnalysisDraft {
     #[serde(alias = "zoom_suggestions")]
     pub zoom_suggestions: Vec<ZoomSuggestion>,
     #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
     pub language: String,
     #[serde(default)]
     pub status: String,
@@ -767,6 +769,7 @@ fn validate_draft(draft: &AnalysisDraft, manifest: &FrameManifest) -> Result<(),
         return Err(AppError::new("ANALYSIS_OUTPUT_INVALID", "Draft validation failed: zoom_suggestion_count_exceeds_100."));
     }
 
+    // Tutorial steps are core output and remain strict.
     let duration = manifest.source_duration_ms;
     let known_frames: HashSet<&str> = manifest.frames.iter().map(|f| f.id.as_str()).collect();
     let mut previous_end = 0_u64;
@@ -809,12 +812,37 @@ fn validate_draft(draft: &AnalysisDraft, manifest: &FrameManifest) -> Result<(),
         }
         previous_end = step.end_ms;
     }
+    Ok(())
+}
 
-    let mut zoom_ids = HashSet::new();
-    for (index, zoom) in draft.zoom_suggestions.iter().enumerate() {
+#[derive(Debug)]
+struct RejectedZoomSuggestion {
+    index: usize,
+    reason: &'static str,
+    start_ms: u64,
+    end_ms: u64,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    target_scale: f64,
+    evidence_frame_count: usize,
+}
+
+fn filter_invalid_zoom_suggestions(
+    draft: &mut AnalysisDraft,
+    manifest: &FrameManifest,
+) -> Vec<RejectedZoomSuggestion> {
+    let duration = manifest.source_duration_ms;
+    let known_frames: HashSet<&str> = manifest.frames.iter().map(|frame| frame.id.as_str()).collect();
+    let mut seen_ids = HashSet::<String>::new();
+    let mut valid = Vec::with_capacity(draft.zoom_suggestions.len());
+    let mut rejected = Vec::new();
+
+    for (index, zoom) in draft.zoom_suggestions.drain(..).enumerate() {
         let issue = if zoom.id.trim().is_empty() {
             Some("empty_zoom_id")
-        } else if !zoom_ids.insert(zoom.id.as_str()) {
+        } else if !seen_ids.insert(zoom.id.clone()) {
             Some("duplicate_zoom_id")
         } else if zoom.start_ms >= zoom.end_ms {
             Some("zoom_start_must_precede_end")
@@ -839,14 +867,32 @@ fn validate_draft(draft: &AnalysisDraft, manifest: &FrameManifest) -> Result<(),
         } else {
             None
         };
-        if let Some(issue) = issue {
-            return Err(AppError::new(
-                "ANALYSIS_OUTPUT_INVALID",
-                format!("Draft validation failed: zoom_suggestion[{}] {issue}.", index + 1),
+
+        if let Some(reason) = issue {
+            draft.warnings.push(format!(
+                "Zoom suggestion {} was omitted: {}.",
+                index + 1,
+                reason.replace('_', " ")
             ));
+            rejected.push(RejectedZoomSuggestion {
+                index: index + 1,
+                reason,
+                start_ms: zoom.start_ms,
+                end_ms: zoom.end_ms,
+                x: zoom.x,
+                y: zoom.y,
+                width: zoom.width,
+                height: zoom.height,
+                target_scale: zoom.target_scale,
+                evidence_frame_count: zoom.evidence_frame_ids.len(),
+            });
+        } else {
+            valid.push(zoom);
         }
     }
-    Ok(())
+
+    draft.zoom_suggestions = valid;
+    rejected
 }
 
 fn response_schema() -> Value {
@@ -880,10 +926,10 @@ fn response_schema() -> Value {
                         "id":{"type":"string"},
                         "start_ms":{"type":"integer"},
                         "end_ms":{"type":"integer"},
-                        "x":{"type":"number"},
-                        "y":{"type":"number"},
-                        "width":{"type":"number"},
-                        "height":{"type":"number"},
+                        "x":{"type":"number","minimum":0,"maximum":1,"description":"Normalized horizontal position of the top-left corner relative to the full frame, from 0 to 1."},
+                        "y":{"type":"number","minimum":0,"maximum":1,"description":"Normalized vertical position of the top-left corner relative to the full frame, from 0 to 1."},
+                        "width":{"type":"number","exclusiveMinimum":0,"maximum":1,"description":"Normalized width as a fraction of the full frame; x plus width must not exceed 1."},
+                        "height":{"type":"number","exclusiveMinimum":0,"maximum":1,"description":"Normalized height as a fraction of the full frame; y plus height must not exceed 1."},
                         "target_scale":{"type":"number"},
                         "rationale":{"type":"string"},
                         "evidence_frame_ids":{"type":"array","items":{"type":"string"}}
@@ -1030,11 +1076,45 @@ fn append_gemini_output_diagnostic(
     }
 }
 
+fn append_gemini_zoom_omission_diagnostic(
+    run_dir: &Path,
+    model: &str,
+    rejected: &[RejectedZoomSuggestion],
+) {
+    let diagnostic = json!({
+        "timestamp_ms": now_ms(),
+        "provider": "google-gemini",
+        "event": "optional_zoom_suggestions_omitted",
+        "model": model,
+        "rejected": rejected.iter().map(|zoom| json!({
+            "index": zoom.index,
+            "reason": zoom.reason,
+            "start_ms": zoom.start_ms,
+            "end_ms": zoom.end_ms,
+            "normalized_geometry": {
+                "x": zoom.x,
+                "y": zoom.y,
+                "width": zoom.width,
+                "height": zoom.height
+            },
+            "target_scale": zoom.target_scale,
+            "evidence_frame_count": zoom.evidence_frame_count
+        })).collect::<Vec<_>>()
+    });
+    let path = run_dir.join("provider-errors.jsonl");
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut line) = serde_json::to_vec(&diagnostic) {
+            line.push(b'\\n');
+            let _ = file.write_all(&line);
+        }
+    }
+}
+
 fn gemini_request_body(manifest: &FrameManifest, run_dir: &Path, model: &str) -> Result<Value, AppError> {
     let mut content = vec![json!({
         "type":"text",
         "text": format!(
-            "Analyze these timestamped screenshots from one desktop workflow recording. Produce a concise, evidence-grounded tutorial. Do not invent actions not visible in the frames. Distinguish observed evidence from inference. Every step and zoom suggestion must cite one or more supplied frame IDs. Use milliseconds from the source video. Language: {}. Optional workflow context: {}. Source duration: {} ms. Source dimensions: {}x{}. Available frame IDs and timestamps: {}",
+            "Analyze these timestamped screenshots from one desktop workflow recording. Produce a concise, evidence-grounded tutorial. Do not invent actions not visible in the frames. Distinguish observed evidence from inference. Every step and zoom suggestion must cite one or more supplied frame IDs. Zoom suggestions are optional; return an empty zoom_suggestions array when no clear zoom target is visible. For each zoom, x and y are normalized top-left coordinates relative to the entire frame, and width and height are normalized fractions of that frame (all values 0 to 1); x + width and y + height must each be at most 1. These are not pixel coordinates. Use milliseconds from the source video. Language: {}. Optional workflow context: {}. Source duration: {} ms. Source dimensions: {}x{}. Available frame IDs and timestamps: {}",
             manifest.language,
             if manifest.workflow_description.trim().is_empty() { "(none)" } else { manifest.workflow_description.as_str() },
             manifest.source_duration_ms,
@@ -1061,7 +1141,7 @@ fn gemini_request_body(manifest: &FrameManifest, run_dir: &Path, model: &str) ->
     let body = json!({
         "model": model,
         "input": content,
-        "system_instruction": "You create clear software workflow tutorials from visual evidence. Never claim a click, typed value, or hidden action unless a frame proves it. Do not include markdown fences.",
+        "system_instruction": "You create clear software workflow tutorials from visual evidence. Never claim a click, typed value, or hidden action unless a frame proves it. Zoom suggestions are optional: omit a zoom if its rectangle cannot be confidently placed fully inside the frame. Zoom x/y are normalized top-left coordinates and width/height are normalized fractions of the full frame, all from 0 to 1; x + width and y + height must not exceed 1. Never use pixel coordinates. Do not include markdown fences.",
         "response_format": {
             "type": "text",
             "mime_type": "application/json",
@@ -1342,6 +1422,10 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
                 Some(draft.zoom_suggestions.len()),
             );
             return Err(error);
+        }
+        let rejected_zooms = filter_invalid_zoom_suggestions(&mut draft, &manifest);
+        if !rejected_zooms.is_empty() {
+            append_gemini_zoom_omission_diagnostic(&run_dir, &used_model, &rejected_zooms);
         }
         draft.status = "needs_review".to_string();
         draft.language = manifest.language.clone();
@@ -1643,6 +1727,116 @@ mod tests {
     }
 
 
+    fn test_frame_manifest() -> FrameManifest {
+        FrameManifest {
+            schema_version: 1,
+            run_id: "a12345-1".to_string(),
+            recording_id: "recording-1".to_string(),
+            source_file_name: "recording.mp4".to_string(),
+            source_duration_ms: 5_000,
+            source_width: 1920,
+            source_height: 1080,
+            sampling_strategy: "test".to_string(),
+            sample_count: 1,
+            max_edge: 1024,
+            total_bytes: 100,
+            workflow_description: String::new(),
+            language: "en".to_string(),
+            frames: vec![FrameReference {
+                id: "frame-000".to_string(),
+                timestamp_ms: 0,
+                relative_path: "frames/frame-000.jpg".to_string(),
+                width: 1024,
+                height: 576,
+                mime_type: "image/jpeg".to_string(),
+                byte_size: 100,
+            }],
+        }
+    }
+
+    #[test]
+    fn invalid_optional_zoom_is_omitted_without_rejecting_valid_tutorial_steps() {
+        let manifest = test_frame_manifest();
+        let mut draft: AnalysisDraft = serde_json::from_value(json!({
+            "schema_version": 1,
+            "summary": "A valid tutorial summary",
+            "steps": [{
+                "id": "step-1",
+                "title": "Open settings",
+                "description": "Open the application settings.",
+                "start_ms": 100,
+                "end_ms": 900,
+                "evidence_frame_ids": ["frame-000"],
+                "confidence": 0.95,
+                "evidence_kind": "observed"
+            }],
+            "zoom_suggestions": [
+                {
+                    "id": "zoom-out-of-bounds",
+                    "start_ms": 200,
+                    "end_ms": 700,
+                    "x": 0.8,
+                    "y": 0.1,
+                    "width": 0.3,
+                    "height": 0.3,
+                    "target_scale": 1.5,
+                    "rationale": "This rectangle exceeds the right frame edge.",
+                    "evidence_frame_ids": ["frame-000"]
+                },
+                {
+                    "id": "zoom-valid",
+                    "start_ms": 1000,
+                    "end_ms": 1500,
+                    "x": 0.1,
+                    "y": 0.2,
+                    "width": 0.3,
+                    "height": 0.4,
+                    "target_scale": 1.5,
+                    "rationale": "Emphasize the visible settings control.",
+                    "evidence_frame_ids": ["frame-000"]
+                }
+            ]
+        })).unwrap();
+
+        validate_draft(&draft, &manifest).unwrap();
+        let rejected = filter_invalid_zoom_suggestions(&mut draft, &manifest);
+
+        assert_eq!(draft.steps.len(), 1);
+        assert_eq!(draft.zoom_suggestions.len(), 1);
+        assert_eq!(draft.zoom_suggestions[0].id, "zoom-valid");
+        assert_eq!(draft.warnings.len(), 1);
+        assert!(draft.warnings[0].contains("zoom geometry out of bounds"));
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].index, 1);
+        assert_eq!(rejected[0].reason, "zoom_geometry_out_of_bounds");
+        assert!((rejected[0].x + rejected[0].width) > 1.0);
+    }
+
+    #[test]
+    fn invalid_core_tutorial_step_still_rejects_the_draft() {
+        let manifest = test_frame_manifest();
+        let mut draft: AnalysisDraft = serde_json::from_value(json!({
+            "schema_version": 1,
+            "summary": "A tutorial summary",
+            "steps": [{
+                "id": "step-1",
+                "title": "Open settings",
+                "description": "Open the application settings.",
+                "start_ms": 100,
+                "end_ms": 900,
+                "evidence_frame_ids": ["unknown-frame"],
+                "confidence": 0.95,
+                "evidence_kind": "observed"
+            }],
+            "zoom_suggestions": []
+        })).unwrap();
+
+        let error = validate_draft(&draft, &manifest).unwrap_err();
+        assert_eq!(error.code, "ANALYSIS_OUTPUT_INVALID");
+        assert!(error.message.contains("step_references_unknown_frame_id"));
+        assert!(draft.warnings.is_empty());
+    }
+
     #[test]
     fn deserializes_snake_case_gemini_schema_and_serializes_camel_case_app_contract() {
         let model_output = json!({
@@ -1677,8 +1871,10 @@ mod tests {
         assert_eq!(draft.steps[0].start_ms, 100);
         assert_eq!(draft.steps[0].evidence_frame_ids, vec!["frame-000"]);
         assert_eq!(draft.zoom_suggestions[0].target_scale, 1.5);
+        assert!(draft.warnings.is_empty());
 
         let app_output = serde_json::to_value(&draft).unwrap();
+        assert_eq!(app_output["warnings"], json!([]));
         assert!(app_output.get("schemaVersion").is_some());
         assert!(app_output.get("zoomSuggestions").is_some());
         assert!(app_output["steps"][0].get("startMs").is_some());

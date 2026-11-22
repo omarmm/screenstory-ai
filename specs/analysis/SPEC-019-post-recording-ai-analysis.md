@@ -107,9 +107,11 @@ Domain validation rules:
 - Steps must be ordered and non-overlapping unless a later approved schema explicitly permits overlap.
 - Every evidence frame ID must exist in the approved manifest.
 - Confidence must be within 0–1.
-- Zoom coordinates must be normalized, width/height positive, and the rectangle must remain inside the source frame.
+- Zoom coordinates must be normalized relative to the full source frame, width/height positive, and the rectangle must remain inside the source frame.
 - Target zoom scale must remain within the approved safe range of 1.0–3.0.
-- Invalid output is rejected; it is never silently coerced into a valid timeline.
+- Core tutorial content (schema, summary, steps, timestamps, confidence, and step evidence) remains strict: invalid core content rejects the draft.
+- Zoom suggestions are optional enhancements. An individually malformed zoom suggestion is omitted without rejecting valid tutorial steps or other valid zoom suggestions. The omission reason and normalized numeric geometry are written to local provider diagnostics, and a user-visible warning is included in the saved draft.
+- Invalid zoom coordinates are never clamped or silently coerced into a different region.
 
 ### 2.7 Persistence and re-analysis
 

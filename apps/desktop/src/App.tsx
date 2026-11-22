@@ -37,7 +37,7 @@ type AnalysisStatus = {
   errorCode: string | null; workflowDescription: string; language: string;
 };
 type AnalysisDraft = {
-  schemaVersion: number; summary: string; status: string; language: string;
+  schemaVersion: number; summary: string; status: string; language: string; warnings: string[];
   steps: { id: string; title: string; description: string; startMs: number; endMs: number; confidence: number; evidenceKind: string; evidenceFrameIds: string[] }[];
   zoomSuggestions: { id: string; startMs: number; endMs: number; x: number; y: number; width: number; height: number; targetScale: number; rationale: string; evidenceFrameIds: string[] }[];
 };
@@ -839,6 +839,7 @@ export default function App() {
                   {activeAnalysis.status === "completed" && analysisDraft && <>
                     <div className="draft-summary"><strong>AI draft ready for review</strong><p>{analysisDraft.summary}</p><div className="draft-counts"><span>{analysisDraft.steps.length} tutorial steps</span><span>{analysisDraft.zoomSuggestions.length} zoom suggestions</span></div></div>
                     <small>Generated with Google Gemini · {activeAnalysis.model}</small>
+                    {analysisDraft.warnings.length > 0 && <div className="inline-warning" role="status"><strong>Some optional enhancements were omitted</strong><ul>{analysisDraft.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>The tutorial steps are still available for review.</div>}
                     <div className="draft-step-list">{analysisDraft.steps.map((step, index) => <article className="draft-step" key={step.id}><span className="draft-index">{String(index + 1).padStart(2, "0")}</span><div><strong>{step.title}</strong><p>{step.description}</p><small>{formatDuration(step.startMs / 1000)} – {formatDuration(step.endMs / 1000)} · {step.evidenceFrameIds.length} evidence frames · {step.evidenceKind}</small></div></article>)}</div>
                     <div className="analysis-actions"><button className="primary-button" onClick={() => void createEditableTimeline()} disabled={timelineBusy || timeline !== null}>Create editable timeline</button><small>Creates a separate versioned timeline. The AI draft and source video are untouched.</small></div>
                     <small>This draft is not approved for rendering and does not overwrite your original recording.</small>
