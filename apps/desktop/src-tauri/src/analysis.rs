@@ -1063,16 +1063,20 @@ fn append_gemini_http_error(run_dir: &Path, context: GeminiHttpErrorContext<'_>)
     }
 }
 
-fn append_gemini_output_diagnostic(
-    run_dir: &Path,
-    model: &str,
-    stage: &str,
-    reason: &str,
-    interaction_id: Option<&str>,
+struct GeminiOutputDiagnostic<'a> {
+    model: &'a str,
+    stage: &'a str,
+    reason: &'a str,
+    interaction_id: Option<&'a str>,
     response_bytes: usize,
     schema_version: Option<u32>,
     step_count: Option<usize>,
     zoom_count: Option<usize>,
+}
+
+fn append_gemini_output_diagnostic(
+    run_dir: &Path,
+    details: GeminiOutputDiagnostic<'_>,
 ) {
     // Deliberately store metadata and validation reasons only. Never log sampled
     // screenshots, workflow text, or the model-generated tutorial body.
@@ -1080,14 +1084,14 @@ fn append_gemini_output_diagnostic(
         "timestamp_ms": now_ms(),
         "provider": "google-gemini",
         "event": "analysis_output_rejected",
-        "model": model,
-        "stage": stage,
-        "reason": reason,
-        "interaction_id": interaction_id,
-        "response_bytes": response_bytes,
-        "schema_version": schema_version,
-        "step_count": step_count,
-        "zoom_suggestion_count": zoom_count
+        "model": details.model,
+        "stage": details.stage,
+        "reason": details.reason,
+        "interaction_id": details.interaction_id,
+        "response_bytes": details.response_bytes,
+        "schema_version": details.schema_version,
+        "step_count": details.step_count,
+        "zoom_suggestion_count": details.zoom_count
     });
     let path = run_dir.join("provider-errors.jsonl");
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -1374,14 +1378,16 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
             Err(_) => {
                 append_gemini_output_diagnostic(
                     &run_dir,
-                    &used_model,
-                    "interaction_response_json",
-                    "response_json_decode_failed",
-                    None,
-                    response_bytes,
-                    None,
-                    None,
-                    None,
+                    GeminiOutputDiagnostic {
+                        model: &used_model,
+                        stage: "interaction_response_json",
+                        reason: "response_json_decode_failed",
+                        interaction_id: None,
+                        response_bytes,
+                        schema_version: None,
+                        step_count: None,
+                        zoom_count: None,
+                    },
                 );
                 return Err(AppError::new(
                     "GEMINI_RESPONSE_INVALID",
@@ -1395,14 +1401,16 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
             None => {
                 append_gemini_output_diagnostic(
                     &run_dir,
-                    &used_model,
-                    "interaction_model_output",
-                    "no_text_model_output_step",
-                    interaction_id,
-                    response_bytes,
-                    None,
-                    None,
-                    None,
+                    GeminiOutputDiagnostic {
+                        model: &used_model,
+                        stage: "interaction_model_output",
+                        reason: "no_text_model_output_step",
+                        interaction_id,
+                        response_bytes,
+                        schema_version: None,
+                        step_count: None,
+                        zoom_count: None,
+                    },
                 );
                 return Err(AppError::new(
                     "GEMINI_RESPONSE_EMPTY",
@@ -1416,14 +1424,16 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
                 let reason = error.to_string();
                 append_gemini_output_diagnostic(
                     &run_dir,
-                    &used_model,
-                    "draft_json_deserialization",
-                    &reason,
-                    interaction_id,
-                    text.len(),
-                    None,
-                    None,
-                    None,
+                    GeminiOutputDiagnostic {
+                        model: &used_model,
+                        stage: "draft_json_deserialization",
+                        reason: &reason,
+                        interaction_id,
+                        response_bytes: text.len(),
+                        schema_version: None,
+                        step_count: None,
+                        zoom_count: None,
+                    },
                 );
                 return Err(AppError::new(
                     "GEMINI_RESPONSE_INVALID",
@@ -1440,14 +1450,16 @@ fn analyze_worker(project_dir: PathBuf, run_id: String, cancellation: Arc<Atomic
             };
             append_gemini_output_diagnostic(
                 &run_dir,
-                &used_model,
-                "draft_validation",
-                &diagnostic_reason,
-                interaction_id,
-                text.len(),
-                Some(draft.schema_version),
-                Some(draft.steps.len()),
-                Some(draft.zoom_suggestions.len()),
+                GeminiOutputDiagnostic {
+                    model: &used_model,
+                    stage: "draft_validation",
+                    reason: &diagnostic_reason,
+                    interaction_id,
+                    response_bytes: text.len(),
+                    schema_version: Some(draft.schema_version),
+                    step_count: Some(draft.steps.len()),
+                    zoom_count: Some(draft.zoom_suggestions.len()),
+                },
             );
             return Err(error);
         }
@@ -1713,14 +1725,16 @@ mod tests {
 
         append_gemini_output_diagnostic(
             &run_dir,
-            GEMINI_MODEL_FLASH,
-            "draft_validation",
-            "Draft validation failed: tutorial_step[1] step_references_unknown_frame_id.",
-            Some("interaction-test-id"),
-            1234,
-            Some(1),
-            Some(2),
-            Some(0),
+            GeminiOutputDiagnostic {
+                model: GEMINI_MODEL_FLASH,
+                stage: "draft_validation",
+                reason: "Draft validation failed: tutorial_step[1] step_references_unknown_frame_id.",
+                interaction_id: Some("interaction-test-id"),
+                response_bytes: 1234,
+                schema_version: Some(1),
+                step_count: Some(2),
+                zoom_count: Some(0),
+            },
         );
 
         let contents = fs::read_to_string(run_dir.join("provider-errors.jsonl")).unwrap();
@@ -1785,7 +1799,7 @@ mod tests {
     #[test]
     fn invalid_optional_zoom_is_omitted_without_rejecting_valid_tutorial_steps() {
         let manifest = test_frame_manifest();
-        let mut draft: AnalysisDraft = serde_json::from_value(json!({
+        let draft: AnalysisDraft = serde_json::from_value(json!({
             "schema_version": 1,
             "summary": "A valid tutorial summary",
             "steps": [{
