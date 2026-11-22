@@ -900,25 +900,26 @@ fn redact_provider_error_body(body: &str, api_key: &str) -> String {
     sanitized.chars().take(4096).collect()
 }
 
-fn append_gemini_http_error(
-    run_dir: &Path,
-    model: &str,
+struct GeminiHttpErrorContext<'a> {
+    model: &'a str,
     status: u16,
     attempt: usize,
-    request_id: Option<&str>,
-    retry_after: Option<&str>,
-    body: &str,
-    api_key: &str,
-) {
+    request_id: Option<&'a str>,
+    retry_after: Option<&'a str>,
+    body: &'a str,
+    api_key: &'a str,
+}
+
+fn append_gemini_http_error(run_dir: &Path, context: GeminiHttpErrorContext<'_>) {
     let diagnostic = json!({
         "timestamp_ms": now_ms(),
         "provider": "google-gemini",
-        "model": model,
-        "http_status": status,
-        "attempt": attempt + 1,
-        "request_id": request_id,
-        "retry_after": retry_after,
-        "response_body": redact_provider_error_body(body, api_key)
+        "model": context.model,
+        "http_status": context.status,
+        "attempt": context.attempt + 1,
+        "request_id": context.request_id,
+        "retry_after": context.retry_after,
+        "response_body": redact_provider_error_body(context.body, context.api_key)
     });
     let path = run_dir.join("provider-errors.jsonl");
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -1016,8 +1017,16 @@ fn request_gemini_model(
                 let _ = response.take(4096).read_to_end(&mut response_bytes);
                 let response_body = String::from_utf8_lossy(&response_bytes).into_owned();
                 append_gemini_http_error(
-                    run_dir, model, status, attempt, request_id.as_deref(),
-                    retry_after.as_deref(), &response_body, api_key,
+                    run_dir,
+                    GeminiHttpErrorContext {
+                        model,
+                        status,
+                        attempt,
+                        request_id: request_id.as_deref(),
+                        retry_after: retry_after.as_deref(),
+                        body: &response_body,
+                        api_key,
+                    },
                 );
 
                 if status == 401 || status == 403 {
