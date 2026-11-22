@@ -61,7 +61,8 @@ Verification:
 - Target-device verification after rebuilding from commit `2a0aef3` measured 31.334 and 31.642 seconds between attempts when Google returned `Retry-After: 30`; retry timing is verified, although Gemini still returned HTTP 503.
 - Source now offers the three Gemini models used by Walkmark: `gemini-3.6-flash` (default), `gemini-3.5-flash-lite`, and `gemini-3.1-pro-preview`. Google currently lists the two Flash models on its Free API tier; Pro Preview requires a paid Gemini API tier and is disclosed in the selector and transfer consent.
 - Automatic fallback remains limited to exhausted HTTP 5xx retries: 3.6 Flash falls back to 3.5 Flash Lite; 3.5 Flash Lite and 3.1 Pro Preview fall back to 3.6 Flash. It does not fail over on quota/rate-limit, authentication, invalid-request, or network errors. Existing project preferences for the retired Screenstory model IDs migrate to 3.6 Flash without rewriting historical analysis records.
-- This Gemini catalog update, migration, and UI test change are not yet locally tested, formatted, linted, packaged, or verified against the user's API key. A local build and real API test remain pending; GitHub Actions was not run.
+- The Walkmark Gemini catalog update, migration, frontend tests, and typecheck were verified locally by the user. Rust tests passed and Clippy passed; rustfmt still reports formatting differences in analysis.rs and timeline.rs. A local package build and real API test remain pending; GitHub Actions was not run.
+- A real Gemini 3.6 Flash request reached output validation but failed with ANALYSIS_OUTPUT_INVALID. The current diagnostics patch adds a safe provider-errors.jsonl event for response parsing and draft-validation failures, with specific rule names and counts only; it does not log screenshots, workflow text, API keys, or generated tutorial text. This diagnostics patch is pending local verification.
 
 ## M4 — Versioned timeline and step editing
 
