@@ -22,7 +22,7 @@ Add editable zoom segments and text annotations to the versioned timeline withou
 
 ## 3. Annotation model
 
-- Annotation fields: stable ID, text, language (`ar`, `en`, `mixed`), start/end ms, normalized x/y anchor, max width fraction, font size, foreground/background, alignment, origin (`manual`), and direction (`rtl`/`ltr`/`auto`).
+- Annotation fields: stable ID, text, language (`ar`, `en`, `mixed`), start/end ms, normalized x/y anchor, max width fraction, font size, foreground/background, alignment, origin (`ai` for automatically generated step captions or `manual` for user-created captions), and direction (`rtl`/`ltr`/`auto`).
 - Text limit 500 characters; no control characters except line breaks and tab.
 - Position and width must be finite and fully contained in normalized frame bounds.
 - Time range must be inside the source duration.
