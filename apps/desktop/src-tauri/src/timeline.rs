@@ -378,7 +378,7 @@ pub(super) fn validate_timeline(
             || !valid_color(&annotation.background)
             || !["left", "center", "right"].contains(&annotation.alignment.as_str())
             || !["rtl", "ltr", "auto"].contains(&annotation.direction.as_str())
-            || annotation.origin != "manual"
+            || !["ai", "manual"].contains(&annotation.origin.as_str())
         {
             return Err(AppError::new(
                 "TIMELINE_ANNOTATION_INVALID",
@@ -462,6 +462,77 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
     Ok(())
 }
 
+fn is_arabic_script_character(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x0600..=0x06FF
+            | 0x0750..=0x077F
+            | 0x08A0..=0x08FF
+            | 0xFB50..=0xFDFF
+            | 0xFE70..=0xFEFF
+    )
+}
+
+fn annotations_from_steps(
+    steps: &[TimelineStep],
+    fallback_language: &str,
+) -> Vec<TimelineAnnotation> {
+    steps
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| {
+            let text = step.title.trim();
+            if text.is_empty() {
+                return None;
+            }
+
+            let has_arabic = text.chars().any(is_arabic_script_character);
+            let has_latin = text.chars().any(|character| character.is_ascii_alphabetic());
+            let language = match (has_arabic, has_latin) {
+                (true, true) => "mixed",
+                (true, false) => "ar",
+                (false, true) => "en",
+                (false, false) => match fallback_language {
+                    "ar" => "ar",
+                    "en" => "en",
+                    _ => "mixed",
+                },
+            };
+            let direction = if has_arabic {
+                "rtl"
+            } else if has_latin {
+                "ltr"
+            } else if fallback_language == "ar" {
+                "rtl"
+            } else {
+                "ltr"
+            };
+            let (x, alignment) = if direction == "rtl" {
+                (0.92, "right")
+            } else {
+                (0.08, "left")
+            };
+
+            Some(TimelineAnnotation {
+                id: format!("annotation-step-{}", index + 1),
+                text: text.to_string(),
+                language: language.to_string(),
+                start_ms: step.start_ms,
+                end_ms: step.end_ms,
+                x,
+                y: 0.82,
+                max_width: 0.84,
+                font_size: 26,
+                foreground: "#FFFFFF".to_string(),
+                background: "#000000CC".to_string(),
+                alignment: alignment.to_string(),
+                direction: direction.to_string(),
+                origin: "ai".to_string(),
+            })
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub fn create_timeline_from_draft(
     run_id: String,
@@ -516,6 +587,19 @@ pub fn create_timeline_from_draft(
         AppError::new("ANALYSIS_DRAFT_NOT_FOUND", "The tutorial draft could not be read.")
     })?).map_err(|_| AppError::new("ANALYSIS_DRAFT_INVALID", "The tutorial draft is invalid."))?;
 
+    let steps = draft.steps.into_iter().map(|step| TimelineStep {
+        id: step.id,
+        title: step.title,
+        description: step.description,
+        start_ms: step.start_ms,
+        end_ms: step.end_ms,
+        origin: "ai".to_string(),
+        evidence_frame_ids: step.evidence_frame_ids,
+        confidence: Some(step.confidence),
+        evidence_kind: Some(step.evidence_kind),
+    }).collect::<Vec<_>>();
+    let annotations = annotations_from_steps(&steps, &draft.language);
+
     let created_at_ms = now_ms();
     let timeline_id = format!("t{}-{}", created_at_ms, std::process::id());
     let timeline = TimelineDocument {
@@ -530,17 +614,7 @@ pub fn create_timeline_from_draft(
         updated_at_ms: created_at_ms,
         status: "draft".to_string(),
         language: draft.language.clone(),
-        steps: draft.steps.into_iter().map(|step| TimelineStep {
-            id: step.id,
-            title: step.title,
-            description: step.description,
-            start_ms: step.start_ms,
-            end_ms: step.end_ms,
-            origin: "ai".to_string(),
-            evidence_frame_ids: step.evidence_frame_ids,
-            confidence: Some(step.confidence),
-            evidence_kind: Some(step.evidence_kind),
-        }).collect(),
+        steps,
         zoom_segments: draft.zoom_suggestions.into_iter().map(|zoom| TimelineZoomSegment {
             id: zoom.id,
             start_ms: zoom.start_ms,
@@ -556,7 +630,7 @@ pub fn create_timeline_from_draft(
             approval_status: "pending".to_string(),
             transition_duration_ms: 250,
         }).collect(),
-        annotations: Vec::new(),
+        annotations,
     };
     validate_timeline(&timeline, &manifest)?;
     let relative_snapshot = format!("{}/revision-1.json", timeline_id);
@@ -780,6 +854,46 @@ mod tests {
             zoom_segments: vec![],
             annotations: vec![],
         }
+    }
+
+    #[test]
+    fn ai_step_titles_become_timed_editable_captions_automatically() {
+        let mut steps = example_timeline().steps;
+        steps[0].title = "إدخال رقم الهاتف".to_string();
+
+        let mut english_step = steps[0].clone();
+        english_step.id = "step-2".to_string();
+        english_step.title = "Confirm the code".to_string();
+        english_step.start_ms = 1500;
+        english_step.end_ms = 2500;
+        steps.push(english_step);
+
+        let annotations = annotations_from_steps(&steps, "auto");
+
+        assert_eq!(annotations.len(), 2);
+        assert_eq!(annotations[0].text, "إدخال رقم الهاتف");
+        assert_eq!(annotations[0].start_ms, steps[0].start_ms);
+        assert_eq!(annotations[0].end_ms, steps[0].end_ms);
+        assert_eq!(annotations[0].language, "ar");
+        assert_eq!(annotations[0].direction, "rtl");
+        assert_eq!(annotations[0].alignment, "right");
+        assert_eq!(annotations[0].origin, "ai");
+
+        assert_eq!(annotations[1].text, "Confirm the code");
+        assert_eq!(annotations[1].start_ms, steps[1].start_ms);
+        assert_eq!(annotations[1].end_ms, steps[1].end_ms);
+        assert_eq!(annotations[1].language, "en");
+        assert_eq!(annotations[1].direction, "ltr");
+        assert_eq!(annotations[1].alignment, "left");
+        assert_eq!(annotations[1].origin, "ai");
+        assert!(validate_timeline(
+            &TimelineDocument {
+                annotations,
+                steps,
+                ..example_timeline()
+            },
+            &example_manifest(),
+        ).is_ok());
     }
 
     #[test]
