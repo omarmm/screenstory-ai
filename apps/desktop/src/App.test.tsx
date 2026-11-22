@@ -334,7 +334,10 @@ describe("Screenstory desktop application", () => {
     });
 
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open timeline" }));
+    const openTimelineButton = await screen.findByRole("button", { name: "Open timeline" });
+    await waitFor(() => expect(openTimelineButton.disabled).toBe(false));
+    fireEvent.click(openTimelineButton);
+    expect(await screen.findByLabelText("All captions font size")).toBeTruthy();
 
     expect(screen.getByLabelText("Caption 1 text color")).toBeTruthy();
     expect(screen.getByLabelText("Caption 2 background color")).toBeTruthy();
