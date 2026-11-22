@@ -516,9 +516,9 @@ fn annotations_from_steps(
                 start_ms: step.start_ms,
                 end_ms: step.end_ms,
                 x: 0.5,
-                y: 0.86,
+                y: 0.92,
                 max_width: 0.84,
-                font_size: 40,
+                font_size: 44,
                 foreground: "#FFFFFF".to_string(),
                 background: "#000000B3".to_string(),
                 alignment: "center".to_string(),
@@ -930,9 +930,9 @@ mod tests {
         assert_eq!(annotations[0].direction, "rtl");
         assert_eq!(annotations[0].alignment, "center");
         assert_eq!(annotations[0].x, 0.5);
-        assert_eq!(annotations[0].y, 0.86);
+        assert_eq!(annotations[0].y, 0.92);
         assert_eq!(annotations[0].max_width, 0.84);
-        assert_eq!(annotations[0].font_size, 40);
+        assert_eq!(annotations[0].font_size, 44);
         assert_eq!(annotations[0].background, "#000000B3");
         assert_eq!(annotations[0].origin, "ai");
 
@@ -1013,9 +1013,9 @@ mod tests {
         assert_eq!(caption.start_ms, 0);
         assert_eq!(caption.end_ms, 1000);
         assert_eq!(caption.x, 0.5);
-        assert_eq!(caption.y, 0.86);
+        assert_eq!(caption.y, 0.92);
         assert_eq!(caption.max_width, 0.84);
-        assert_eq!(caption.font_size, 40);
+        assert_eq!(caption.font_size, 44);
         assert_eq!(caption.background, "#000000B3");
         assert_eq!(caption.alignment, "center");
         assert_eq!(caption.direction, "rtl");
