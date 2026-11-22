@@ -1799,7 +1799,7 @@ mod tests {
     #[test]
     fn invalid_optional_zoom_is_omitted_without_rejecting_valid_tutorial_steps() {
         let manifest = test_frame_manifest();
-        let draft: AnalysisDraft = serde_json::from_value(json!({
+        let mut draft: AnalysisDraft = serde_json::from_value(json!({
             "schema_version": 1,
             "summary": "A valid tutorial summary",
             "steps": [{
@@ -1857,7 +1857,7 @@ mod tests {
     #[test]
     fn invalid_core_tutorial_step_still_rejects_the_draft() {
         let manifest = test_frame_manifest();
-        let mut draft: AnalysisDraft = serde_json::from_value(json!({
+        let draft: AnalysisDraft = serde_json::from_value(json!({
             "schema_version": 1,
             "summary": "A tutorial summary",
             "steps": [{
