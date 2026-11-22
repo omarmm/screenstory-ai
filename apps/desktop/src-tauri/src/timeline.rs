@@ -568,7 +568,8 @@ fn ensure_automatic_captions(timeline: &mut TimelineDocument) -> bool {
                 existing.foreground = annotation.foreground;
                 existing.background = annotation.background;
                 existing.alignment = annotation.alignment;
-                existing.direction = annotation.direction;
+                // Keep the existing text's language and reading direction.
+                // This migration changes visual presentation only.
             }
             continue;
         }
