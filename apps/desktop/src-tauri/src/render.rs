@@ -327,7 +327,12 @@ fn escape_ass_text(value: &str, direction: &str) -> String {
 }
 
 fn ass_alignment(value: &str) -> u8 {
-    match value { "left" => 7, "right" => 9, _ => 8 }
+    match value {
+        "left" => 7,
+        "right" => 9,
+        "center" => 2,
+        _ => 8,
+    }
 }
 
 fn generate_ass(document: &timeline::TimelineDocument, width: u32, height: u32) -> Result<String, AppError> {
@@ -1018,13 +1023,13 @@ mod tests {
         let mut centered = document.clone();
         let caption = &mut centered.annotations[0];
         caption.x = 0.5;
-        caption.y = 0.86;
+        caption.y = 0.92;
         caption.max_width = 0.84;
-        caption.font_size = 40;
+        caption.font_size = 44;
         caption.background = "#000000B3".into();
         caption.alignment = "center".into();
         let centered_ass = generate_ass(&centered, 1920, 1080).unwrap();
-        assert!(centered_ass.contains("\\an8\\pos(960,929)\\fs40\\b1"));
+        assert!(centered_ass.contains("\\an2\\pos(960,994)\\fs44\\b1"));
         assert!(centered_ass.contains(",154,154,0,,"));
         assert!(centered_ass.contains("\\bord10"));
     }
