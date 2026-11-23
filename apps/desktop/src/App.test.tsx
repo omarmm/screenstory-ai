@@ -335,7 +335,7 @@ describe("Screenstory desktop application", () => {
 
     render(<App />);
     const openTimelineButton = await screen.findByRole("button", { name: "Open timeline" });
-    await waitFor(() => expect(openTimelineButton.disabled).toBe(false));
+    await waitFor(() => expect(openTimelineButton).toBeEnabled());
     fireEvent.click(openTimelineButton);
     expect(await screen.findByLabelText("All captions font size")).toBeTruthy();
     const saveRevisionButton = screen.getByRole("button", { name: "Save revision" });
